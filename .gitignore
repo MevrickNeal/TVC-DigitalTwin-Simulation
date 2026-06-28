@@ -1,0 +1,12 @@
+# MATLAB
+*.asv
+*.m~
+slprj/
+*.slxc
+*.mex*
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
