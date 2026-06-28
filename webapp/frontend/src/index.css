@@ -1,0 +1,13 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-background text-white antialiased m-0 p-0 overflow-hidden;
+  }
+}
+
+.glass-panel {
+  @apply bg-surface border border-surfaceBorder backdrop-blur-xl rounded-2xl shadow-2xl;
+}
