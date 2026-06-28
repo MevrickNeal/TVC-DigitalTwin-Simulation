@@ -1,96 +1,84 @@
 %% nonlinear_eom.m
-% 6-DOF Nonlinear Equations of Motion for Project NEAL
-% Pitch/Yaw decoupled (small angle, symmetry), full translational dynamics
+% 6-DOF Rigid-Body EOM for Project NEAL (Pitch + Vertical channels)
+% Decoupled pitch/yaw assumption valid for near-vertical flight (θ < 15°)
 %
-% State vector:  x = [theta; theta_dot; phi; phi_dot; h; h_dot]
-%   theta     = pitch angle (rad)
-%   theta_dot = pitch rate (rad/s)
-%   phi       = yaw angle (rad)
-%   phi_dot   = yaw rate (rad/s)
-%   h         = altitude (m)
-%   h_dot     = vertical velocity (m/s)
+% State:  x = [θ; θ̇; φ; φ̇; h; ḣ]
+%   θ   = pitch angle from vertical (rad), positive nose-forward
+%   θ̇   = pitch rate (rad/s)
+%   φ   = yaw angle (rad)
+%   φ̇   = yaw rate (rad/s)
+%   h   = altitude above launch (m)
+%   ḣ   = vertical velocity (m/s)
 %
-% Inputs: u = [delta_pitch; delta_yaw] (rad, gimbal angles)
-% =====================================================
+% Input: u = [δ_p; δ_y]  gimbal angles (rad)
+%
+% External disturbance: p.w_dist (rad, effective angle disturbance)
+%   Added as pitch moment disturbance: M_ext = (T·L_arm)·w_dist
+%   This models cross-wind as an equivalent pitch moment [N·m].
+% =====================================================================
 
 function xdot = nonlinear_eom(t, x, u, p)
 
-% Unpack states
-theta     = x(1);
-theta_dot = x(2);
-phi       = x(3);
-phi_dot   = x(4);
-h         = x(5);
-h_dot     = x(6);
+theta     = x(1);    % pitch angle (rad)
+theta_dot = x(2);    % pitch rate  (rad/s)
+h         = x(5);    % altitude    (m)
+h_dot     = x(6);    % vertical velocity (m/s)
 
-% Unpack controls (clamp to limits)
-delta_p = clamp(u(1), deg2rad(-p.max_gimbal), deg2rad(p.max_gimbal));
-delta_y = clamp(u(2), deg2rad(-p.max_gimbal), deg2rad(p.max_gimbal));
+% Clamp gimbal to hard limits
+max_rad  = deg2rad(p.max_gimbal);
+delta_p  = max(-max_rad, min(max_rad, u(1)));   % pitch gimbal
+delta_y  = max(-max_rad, min(max_rad, u(2)));   % yaw gimbal
 
-%% --- Time-varying parameters ---
-[m, J_pitch, xcg] = mass_model(t, p);
-T = thrust_curve(t, p);
-rho = atmosphere(h);
+%% Time-varying plant parameters
+[m, J, xcg] = mass_model(t, p);
+T           = thrust_curve(t, p);
+rho         = atmosphere(max(h, 0));
 
-%% --- Total velocity (approximate, dominated by vertical during powered) ---
-v_total = abs(h_dot) + 0.5;       % m/s, floor at 0.5 to avoid /0 at t=0
+%% Aerodynamics
+v_ax  = abs(h_dot);
+v_tot = max(v_ax, 0.5);                         % floor: avoid /0 at launch
+q_dyn = 0.5 * rho * v_tot^2;                   % dynamic pressure (Pa)
 
-%% --- Aerodynamic Forces ---
-AoA = abs(theta);                  % rad, pitch angle ≈ angle of attack (small angle)
-q_dyn = 0.5 * rho * v_total^2;    % dynamic pressure (Pa)
-Cd = p.Cd0 + p.Cd_slope * rad2deg(AoA);
-Drag = q_dyn * p.ref_area * Cd;   % N (axial drag, opposes motion)
+% Axial drag (opposes vertical motion)
+AoA  = abs(theta);                              % rad (small-angle approx)
+Cd   = p.Cd0 + p.Cd_slope * rad2deg(AoA);
+F_drag = q_dyn * p.ref_area * Cd;              % N (magnitude)
 
-% Normal aerodynamic force (restoring for stable rocket)
-% F_aero_restore ~ Cn_alpha * q * A * AoA (restoring moment)
-Cn = p.Cn_alpha;
-N_aero = q_dyn * p.ref_area * Cn * AoA; % N (restoring normal force)
+% Aerodynamic restoring moment about CG (stable rocket: xcp > xcg)
+% M_aero = -Cn_α · q · S · (xcp − xcg) · θ   [N·m, restoring]
+moment_arm_aero = p.xcp_nom - xcg;             % m (positive → stable)
+M_aero_pitch    = -(p.Cn_alpha * q_dyn * p.ref_area * moment_arm_aero) * theta;
 
-% Aerodynamic restoring moment about CG
-% Moment arm = xcp - xcg  (positive → stable)
-xcp = p.xcp_nom;                   % simplified (constant)
-M_aero_restore = -N_aero * (xcp - xcg);  % N·m (restoring, negative sign)
+%% TVC Moments  (nozzle is at tail: moment arm = length − xcg)
+L_tvc        = p.length - xcg;                 % m  (nozzle → CG)
+M_tvc_pitch  =  T * sin(delta_p) * L_tvc;     % N·m  (pitch)
+M_tvc_yaw    =  T * sin(delta_y) * L_tvc;     % N·m  (yaw, symmetric)
 
-%% --- TVC Thrust Moments ---
-% Gimbal angle creates moment about CG
-% Moment arm = distance from nozzle to CG ≈ length - xcg
-L_nozzle_to_cg = (p.length - xcg);     % m (approx nozzle at tail)
-M_tvc_pitch = T * sin(delta_p) * L_nozzle_to_cg;   % N·m
-M_tvc_yaw   = T * sin(delta_y) * L_nozzle_to_cg;   % N·m
+%% External wind disturbance moment (if field defined in p)
+M_wind = 0;
+if isfield(p, 'w_dist')
+    M_wind = T * L_tvc * p.w_dist;            % equivalent moment from wind
+end
 
-% TVC lateral force component (on attitude dynamics)
-F_lat_pitch = T * sin(delta_p);   % N (lateral force from gimbal, pitch)
-F_lat_yaw   = T * sin(delta_y);   % N
+%% Rotational EOM  (axisymmetric: J_yaw ≈ J_pitch)
+theta_ddot = (M_tvc_pitch + M_aero_pitch + M_wind) / J;
+phi_ddot   = (M_tvc_yaw   + M_aero_pitch          ) / J;
 
-%% --- Pitch Equation of Motion ---
-% J * theta_ddot = M_tvc_pitch + M_aero_restore - damping
-theta_ddot = (M_tvc_pitch + M_aero_restore) / J_pitch;
+%% Translational EOM (vertical, 1-D)
+% Thrust component along vertical ≈ T·cos(δ_p)·cos(δ_y) (small angle)
+F_thrust_v  = T * cos(delta_p) * cos(delta_y);
+F_grav      = -m * p.g;
+F_drag_v    = -sign(h_dot) * F_drag;
 
-%% --- Yaw Equation of Motion ---
-% Symmetric: same structure
-phi_ddot = (M_tvc_yaw   + M_aero_restore) / J_pitch;
-% (using same J_pitch for yaw - axisymmetric rocket)
+h_ddot = (F_thrust_v + F_grav + F_drag_v) / m;
 
-%% --- Translational Dynamics (vertical) ---
-% F_thrust_vertical = T * cos(theta) * cos(phi) ≈ T (small angle)
-F_thrust_vertical = T * cos(delta_p) * cos(delta_y);
-F_drag_vertical   = -sign(h_dot) * Drag;
-F_gravity         = -m * p.g;
-
-h_ddot = (F_thrust_vertical + F_drag_vertical + F_gravity) / m;
-
-%% --- State Derivative ---
-xdot = zeros(6,1);
+%% Assemble state derivative
+xdot    = zeros(6,1);
 xdot(1) = theta_dot;
 xdot(2) = theta_ddot;
-xdot(3) = phi_dot;
+xdot(3) = x(4);          % phi_dot
 xdot(4) = phi_ddot;
 xdot(5) = h_dot;
 xdot(6) = h_ddot;
 
-end
-
-%% --- Helper: clamp ---
-function y = clamp(x, lo, hi)
-    y = max(lo, min(hi, x));
 end

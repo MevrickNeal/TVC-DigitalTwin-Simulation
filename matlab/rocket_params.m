@@ -1,68 +1,72 @@
 %% rocket_params.m
-% Project NEAL - Physical Parameters
-% Extracted from: ProjectNeal1.2.ork / newplotdata.csv
-% Units: SI unless stated
-% =====================================================
+% Project NEAL — Physical Parameters (Ground Truth)
+% Source: ProjectNeal1.2.ork + newplotdata.csv
+% All SI units unless noted.
+%
+% Key OR derivations:
+%   CG = 62.52 cm (col 28), CP = 79.0 cm (col 27)
+%   Inertia pitch: col 24 = 0.205 kg·m² (wet), 0.197 kg·m² (dry)
+%   Mass wet: col 22 = 2047 g; dry: 2007.76 g (post-burnout row)
+%   Motor burnout: t ≈ 1.10 s (thrust → 0, col 30)
+%   Reference area: col 54 = 45.604 cm²; ref length: col 53 = 7.62 cm
+% =====================================================================
 
 function p = rocket_params()
 
-%% --- Geometry ---
-p.diameter    = 0.0762;          % m (3 in)
-p.length      = 0.785;           % m (estimated from CG/CP positions)
-p.ref_area    = 45.604e-4;       % m^2 (from OR: 45.604 cm^2)
-p.ref_length  = 0.0762;          % m (diameter = ref length)
+%% Geometry
+p.diameter   = 0.0762;       % m (3.00 in body tube)
+p.ref_area   = 45.604e-4;    % m² (π·d²/4, matches OR col 54)
+p.ref_length = 0.0762;       % m (diameter used as ref length in OR)
 
-%% --- Mass Properties ---
-p.m_wet       = 2.047;           % kg (launch mass from OR: 2047 g)
-p.m_dry       = 2.00776;         % kg (post-burnout: 2007.76 g)
-p.m_prop      = p.m_wet - p.m_dry; % kg (propellant mass = 0.0392 kg)
+% Total length derived: nose-tip to nozzle
+% xcg_wet = 0.6252 m, xcp = 0.790 m, static margin = 2.16 cal = 0.165 m
+% Body extends ~0.08 m aft of CP (fin span + nozzle protrusion)
+p.length = 0.870;            % m (nose tip → nozzle exit plane, calibrated
+                              %    so L - xcg_wet ≈ 0.245 m moment arm)
 
-%% --- Inertia (at launch, about CG) ---
-p.J_pitch_wet = 0.205;           % kg·m^2 (from OR, col 24)
-p.J_roll_wet  = 0.002;           % kg·m^2 (from OR, col 25)
-p.J_pitch_dry = 0.197;           % kg·m^2 (post-burnout, from OR)
-p.J_roll_dry  = 0.002;           % kg·m^2
+%% Mass Properties
+p.m_wet  = 2.047;            % kg  (2047 g, OR col 22 at t=0)
+p.m_dry  = 2.00776;          % kg  (2007.76 g, OR col 22 post-burnout)
+p.m_prop = p.m_wet - p.m_dry; % kg (39.24 g propellant)
 
-%% --- CG / CP Locations (from nose tip) ---
-p.xcg_wet     = 0.6252;          % m (62.52 cm from OR)
-p.xcg_dry     = 0.6252;          % m (stays ~constant, small motor)
-p.xcp_nom     = 0.790;           % m (79.0 cm at burnout from OR ~78-79 cm)
+%% Inertia (pitch axis, about CG) — from OR col 24
+p.J_pitch_wet = 0.205;       % kg·m²  (launch)
+p.J_pitch_dry = 0.197;       % kg·m²  (burnout, Δ = 0.008 kg·m²)
+p.J_roll      = 0.002;       % kg·m²  (axial, col 25)
 
-%% --- Motor / Thrust ---
-p.t_burn      = 1.10;            % s (burnout from OR ~t=1.1s, thrust→0)
-p.T_peak      = 75.0;            % N (approx peak from OR col 30)
-p.T_avg       = 45.0;            % N (rough average during burn)
-% Time-thrust table (from OR col 30 at key points)
-p.thrust_t    = [0, 0.05, 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.1, 1.2];
-p.thrust_N    = [0, 22,   40,  63,  72,  68,  58,  30,  5,   0  ];
+%% CG / CP (from nose tip)
+p.xcg_wet = 0.6252;          % m  (62.52 cm, OR col 28 at t=0)
+p.xcg_dry = 0.6252;          % m  (nearly constant: propellant is 1.9%)
+p.xcp_nom = 0.790;           % m  (79.0 cm, OR col 27, conservative estimate)
 
-%% --- Aerodynamics (from OR) ---
-p.Cd0         = 0.45;            % drag coefficient (from OR at low AoA)
-p.Cd_slope    = 0.012;           % Cd increase per degree AoA (approx)
-p.Cn_alpha    = 0.45;            % normal force slope (from OR)
-p.rho0        = 1.225;           % kg/m^3 (sea-level air density)
+%% Motor — Thrust Curve
+% Extracted from OR col 30; t_burn observed at last non-zero thrust
+p.t_burn   = 1.10;           % s
+p.T_peak   = 75.0;           % N
+% Piecewise-linear thrust table (t, N)
+p.thrust_t = [0.00, 0.05, 0.10, 0.20, 0.40, 0.60, 0.80, 1.00, 1.10, 1.20];
+p.thrust_N = [0,    22,   40,   63,   72,   68,   58,   30,   5,    0  ];
 
-%% --- Stability ---
-p.stability_cal = 1.9;           % calibers (from OR during burn)
-% Static margin (m) = stability_cal * diameter
-p.static_margin = p.stability_cal * p.diameter; % ~0.145 m
+%% Aerodynamics (OR, small-angle linearised)
+p.Cd0      = 0.45;           % axial drag (low AoA, from OR col 33)
+p.Cd_slope = 0.012;          % ΔCd per degree AoA
+p.Cn_alpha = 0.45;           % normal-force slope dCn/dα (from OR col 38)
+p.rho0     = 1.225;          % kg/m³ sea-level density
 
-%% --- TVC / Actuator ---
-p.max_gimbal  = 10.0;            % deg (max gimbal angle)
-p.max_gimbal_rate = 200.0;       % deg/s (servo speed limit)
-p.servo_tau   = 0.05;            % s (first-order servo time constant)
-p.gimbal_arm  = 0.02;            % m (distance from thrust axis to gimbal pivot)
+%% Stability
+% Static margin ≈ 2.16 cal from OR: (xcp−xcg)/d = (0.790−0.6252)/0.0762
+p.static_margin_cal = (p.xcp_nom - p.xcg_wet) / p.diameter; % ~2.16
 
-%% --- Environment ---
-p.g           = 9.792;           % m/s^2 (from OR)
+%% TVC / Actuator
+p.max_gimbal      = 10.0;    % deg  (hardware limit)
+p.max_gimbal_rate = 200.0;   % deg/s (servo slew rate)
+p.servo_tau       = 0.05;    % s    (first-order servo time constant)
 
-%% --- Simulation ---
-p.t_end       = 4.2;             % s (simulate through apogee at 4.127s)
-p.dt          = 0.005;           % s (200 Hz)
+%% Environment
+p.g  = 9.792;                % m/s² (from OR col 26)
 
-%% --- Controller Phase ---
-% TVC is active only during powered flight (0 to t_burn)
-% After burnout, aerodynamic stability provides passive stabilisation
-p.tvc_active_end = p.t_burn + 0.1; % small margin
+%% Simulation time grid
+p.dt              = 0.005;   % s    (200 Hz — matches STM32 control loop)
+p.t_burn_end      = p.t_burn + 0.10;  % s, TVC active window (burn + margin)
 
 end

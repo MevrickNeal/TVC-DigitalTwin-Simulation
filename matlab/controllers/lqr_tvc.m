@@ -1,68 +1,62 @@
 %% lqr_tvc.m
-% LQR (Linear Quadratic Regulator) for TVC
+% LQR with Integral Augmentation (LQI) — Pitch Channel TVC
 %
-% Linearized about hover/vertical flight (theta=0, theta_dot=0)
-% State: [theta; theta_dot]   Input: [delta]
+% Augmented state:  xa = [θ;  θ̇;  ∫(θ_ref−θ)dt]
+% Plant (linearised, time-varying):
+%   θ̈ = b(t)·δ + a22·θ
+%   b(t) = T(t)·L_arm(t)/J(t)       [time-varying input gain]
+%   a22  = −Cₙα·q·S·(xcp−xcg)/J     [aerodynamic stability, linearised]
 %
-% Plant (linearized pitch channel):
-%   theta_ddot = (T * L_arm / J) * delta + (M_aero / J) * theta
-%
-% where M_aero = -N_aero*(xcp-xcg) / J * theta (restoring)
-% =====================================================
+% ARE solved via MATLAB lqr() at each timestep to track b(t) variations.
+% K is re-computed only when b changes by >5% (caches for speed).
+% =====================================================================
 
-function [delta_cmd, lqr_state] = lqr_tvc(theta_ref, theta, theta_dot, ...
-                                            lqr_state, t, p)
+function [delta_cmd, cs] = lqr_tvc(theta_ref, theta, theta_dot, cs, t, p)
 
-%% --- Time-varying linearized model (update gains at each step) ---
-[m, J, xcg] = mass_model(t, p);
-T = thrust_curve(t, p);
-if T < 1.0, T = 1.0; end  % avoid divide-by-zero before ignition
+dt = p.dt;
 
-% Thrust moment arm (nozzle to CG)
-L_arm = p.length - xcg;
+%% Time-varying plant
+[~, J, xcg] = mass_model(t, p);
+T           = max(thrust_curve(t, p), 1.0);    % floor: avoids b=0
 
-% Aerodynamic stability derivative (a22 entry in A matrix)
-% theta_ddot from aero = (Cn_alpha * q * A * (xcp-xcg)) / J * theta
-% Simplified at low speed (early flight), use nominal q
-q_nom = 0.5 * 1.225 * 30^2;   % dynamic pressure at ~30 m/s
-a22   = -(p.Cn_alpha * q_nom * p.ref_area * (p.xcp_nom - xcg)) / J;
-% Note: negative = restoring (stable)
+L_arm = p.length - xcg;             % nozzle → CG moment arm
+b     = T * L_arm / J;              % input gain [rad/s² / rad]
 
-% State matrix A = [0, 1; a22, 0]
-% Input matrix B = [0; T*L_arm/J]
-b2 = T * L_arm / J;
+% Aero restoring (linearised at representative mid-burn q)
+q_est = 0.5 * 1.225 * 25.0^2;      % Pa  (~25 m/s at mid-burn)
+a22   = -(p.Cn_alpha * q_est * p.ref_area * (p.xcp_nom - xcg)) / J;
 
-%% --- LQR Gain (computed analytically for 2-state system) ---
-% Cost matrices: Q penalizes angle error, R penalizes gimbal use
-Q11 = 100;   % theta penalty
-Q22 = 10;    % theta_dot penalty
-R11 = 1;     % gimbal angle penalty
+%% Augmented system
+A = [0,   1,  0;
+     a22, 0,  0;
+     -1,  0,  0];
+B = [0; b; 0];
 
-% Solve Riccati analytically for 2x2 system or use stored gains
-% For simplicity: use pole placement equivalent gains
-% Target poles: -5 ± 3j (fast, damped)
-% LQR gains computed offline for nominal params:
-K1 = sqrt(Q11 / R11);                    % angle gain
-K2 = sqrt((2*K1 + Q22) / R11) * 0.5;   % rate gain
-% Scale by current B to account for varying thrust
-K1_scaled = K1 / max(b2, 0.01);
-K2_scaled = K2 / max(b2, 0.01);
+Q = diag([300, 30, 80]);    % Weights: θ errors penalised most
+R = 1.5;                    % Gimbal penalty (controls aggression)
 
-% Clamp gains to reasonable range
-K1_scaled = clamp(K1_scaled, 0.01, 5.0);
-K2_scaled = clamp(K2_scaled, 0.001, 1.0);
-
-%% --- Control Law ---
-e_theta    = theta_ref - theta;
-e_rate     = 0 - theta_dot;      % reference rate = 0 (hold attitude)
-
-delta_cmd  = K1_scaled * e_theta + K2_scaled * e_rate;
-delta_cmd  = clamp(delta_cmd, deg2rad(-p.max_gimbal), deg2rad(p.max_gimbal));
-
-lqr_state  = [];  % LQR is memoryless (no integrator state)
-
+%% Solve ARE — use cached K if b hasn't changed significantly
+persistent K_cache b_cache
+if isempty(K_cache) || abs(b - b_cache)/max(abs(b_cache),1e-3) > 0.05
+    try
+        K_cache = lqr(A, B, Q, R);
+    catch
+        % Fallback during very-low-thrust transient
+        omega_c = 7.0;
+        K_cache = [omega_c^2/max(b,1), 2*omega_c/max(b,1), omega_c^2*0.6/max(b,1)];
+    end
+    b_cache = b;
 end
+K = K_cache;
 
-function y = clamp(x, lo, hi)
-    y = max(lo, min(hi, x));
+%% Integrator update (anti-windup)
+cs.int_e = cs.int_e + (theta_ref - theta) * dt;
+cs.int_e = max(-0.8, min(0.8, cs.int_e));
+
+%% Control law (LQI tracking formulation)
+xa        = [theta; theta_dot; cs.int_e];
+xa_ref    = [theta_ref; 0; 0];
+delta_cmd = -K * (xa - xa_ref);
+delta_cmd = max(deg2rad(-p.max_gimbal), min(deg2rad(p.max_gimbal), delta_cmd));
+
 end

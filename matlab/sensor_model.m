@@ -1,33 +1,47 @@
 %% sensor_model.m
-% IMU sensor noise model + complementary filter for state estimation
-% Models realistic STM32 IMU (MPU6050-class)
+% IMU sensor noise model + complementary filter
+% Models MPU6050-class IMU on STM32 TVC board
 %
-% Noise specs (MPU6050):
-%   Gyro noise:  0.005 deg/s/sqrt(Hz) → σ ≈ 0.01 deg/s at 200Hz
-%   Accel noise: 400 μg/sqrt(Hz)      → σ ≈ 0.004 m/s^2 at 200Hz
-%   Gyro bias:   ±0.1 deg/s (slowly drifting)
+% KEY PHYSICS: During powered flight, the accelerometer measures
+%   specific force = (thrust + gravity)/m — NOT pure gravity.
+%   Therefore accel-based tilt is invalid during burn.
+%   Use gyro-only integration (alpha=1) during thrust phase.
+%   After burnout, re-enable accelerometer correction.
+%
+% Noise specs (MPU6050 @ 200 Hz):
+%   Gyro noise:  sigma ≈ 0.01 deg/s
+%   Gyro bias:   0.05 deg/s (modelled constant per flight)
+%   Accel noise: sigma ≈ 0.004 m/s²
 % =====================================================
 
 function [theta_est, theta_dot_est] = sensor_model(theta_true, theta_dot_true, ...
-                                                     theta_est_prev, dt, noise_scale)
-% noise_scale: 1.0 = nominal, >1 = stress test
-
+                                                     theta_est_prev, dt, noise_scale, thrust)
+% thrust: current thrust (N) — accel correction disabled when thrust > 0
 if nargin < 5, noise_scale = 1.0; end
+if nargin < 6, thrust = 0; end
 
 %% --- Gyro measurement ---
-sigma_gyro   = noise_scale * deg2rad(0.01);  % rad/s
-bias_gyro    = noise_scale * deg2rad(0.05);  % rad/s (constant bias)
-gyro_meas    = theta_dot_true + sigma_gyro * randn() + bias_gyro;
-
-%% --- Accelerometer-based angle (for filter correction) ---
-sigma_accel  = noise_scale * 0.004;          % m/s^2
-accel_meas   = sin(theta_true) * 9.792 + sigma_accel * randn();
-theta_accel  = asin(clamp(accel_meas / 9.792, -1, 1));
+sigma_gyro = noise_scale * deg2rad(0.01);   % rad/s RMS noise
+bias_gyro  = noise_scale * deg2rad(0.05);   % rad/s constant bias
+gyro_meas  = theta_dot_true + sigma_gyro * randn() + bias_gyro;
 
 %% --- Complementary Filter ---
-% alpha = high-pass weight on gyro, (1-alpha) = low-pass on accel
-alpha = 0.98;
-theta_est     = alpha * (theta_est_prev + gyro_meas * dt) + (1 - alpha) * theta_accel;
+% During thrust: alpha = 1 (gyro only — accel unusable)
+% After burnout: alpha = 0.98 (gyro HPF + accel LPF)
+if thrust > 1.0
+    alpha = 1.0;    % powered phase: gyro-only, no accel drift correction
+else
+    % Post-burnout: accel reliable again
+    sigma_accel = noise_scale * 0.004;
+    accel_meas  = sin(theta_true) * 9.792 + sigma_accel * randn();
+    theta_accel = asin(clamp(accel_meas / 9.792, -1, 1));
+    alpha = 0.98;
+    theta_est = alpha * (theta_est_prev + gyro_meas * dt) + (1 - alpha) * theta_accel;
+    theta_dot_est = gyro_meas;
+    return;
+end
+
+theta_est     = theta_est_prev + gyro_meas * dt;   % pure gyro integration
 theta_dot_est = gyro_meas;
 
 end
