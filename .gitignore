@@ -10,3 +10,19 @@ slprj/
 Thumbs.db
 .vscode/
 .idea/
+
+# PyInstaller & builds
+build/
+build_cache/
+dist/
+*.spec
+project_neal_files.zip
+launcher_debug.log
+
+# Python
+__pycache__/
+*.pyc
+
+# Temp / Lock files
+~$*
+

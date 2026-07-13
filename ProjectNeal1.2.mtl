@@ -12,7 +12,7 @@ d 1.0
 Ka 0.0 0.0 0.0
 Kd 1.0 1.0 1.0
 Ks 0.25 0.25 0.25
-map_Kd -o 0.0 0.0 0.0 -s 1.0 1.0 1.0 -clamp off D:\Thrust Vector Control 2026\ProjectNeal1.2_img\1.bmp
+map_Kd -o 0.0 0.0 0.0 -s 1.0 1.0 1.0 -clamp off D:\Thrust Vector Control 2026\ProjectNeal1.2_img\1.png
 newmtl mat_3_Inner Tube
 illum 2
 Ns 75.0
@@ -52,7 +52,7 @@ d 1.0
 Ka 0.0 0.0 0.0
 Kd 1.0 0.0 0.028991187
 Ks 0.25 0.25 0.25
-map_Kd -o 0.0 0.0 0.0 -s 1.0 1.0 1.0 -clamp off D:\Thrust Vector Control 2026\ProjectNeal1.2_img\fins.bmp
+map_Kd -o 0.0 0.0 0.0 -s 1.0 1.0 1.0 -clamp off D:\Thrust Vector Control 2026\ProjectNeal1.2_img\fins.png
 newmtl mat_7_Parachute
 illum 2
 Ns 0.0
