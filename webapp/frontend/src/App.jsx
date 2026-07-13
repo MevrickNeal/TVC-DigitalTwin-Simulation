@@ -358,8 +358,8 @@ function Chart({ data, extra={} }) {
   const [hoverIdx, setHoverIdx] = useState(null);
   const [hoverX, setHoverX] = useState(0);
 
-  if (!data || data.length === 0) return null;
   const traces = useMemo(() => {
+    if (!data || data.length === 0) return [];
     return data.map(t => {
       const type = t.type || 'line';
       const x = t.x || [];
@@ -389,6 +389,8 @@ function Chart({ data, extra={} }) {
     if (extra.yaxis && extra.yaxis.range) { minY = extra.yaxis.range[0]; maxY = extra.yaxis.range[1]; }
     return { minX, maxX, minY, maxY };
   }, [traces, extra]);
+
+  if (!data || data.length === 0) return null;
 
   const width = 300, height = 110;
   const padding = { top: 12, right: 10, bottom: 18, left: 32 };
@@ -681,11 +683,11 @@ function GPSMapLeaflet({ lat, lon }) {
     <div style={{ position: 'relative', height: 122, borderRadius: 6, overflow: 'hidden', border: '1px solid rgba(232,18,28,0.22)', marginBottom: 6 }}>
       <div ref={containerRef} style={{ height: '100%', width: '100%', filter: 'invert(1) hue-rotate(200deg) brightness(0.78) saturate(0.65)' }}/>
       <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+        <div style={{ position: 'absolute', top: 8, left: 8, width: 12, height: 12, borderTop: '1.5px solid #e8121c', borderLeft: '1.5px solid #e8121c', opacity: 0.8 }}/>
+        <div style={{ position: 'absolute', top: 8, right: 8, width: 12, height: 12, borderTop: '1.5px solid #e8121c', borderRight: '1.5px solid #e8121c', opacity: 0.8 }}/>
+        <div style={{ position: 'absolute', bottom: 8, left: 8, width: 12, height: 12, borderBottom: '1.5px solid #e8121c', borderLeft: '1.5px solid #e8121c', opacity: 0.8 }}/>
+        <div style={{ position: 'absolute', bottom: 8, right: 8, width: 12, height: 12, borderBottom: '1.5px solid #e8121c', borderRight: '1.5px solid #e8121c', opacity: 0.8 }}/>
         <svg width="100%" height="100%" style={{ position: 'absolute', inset: 0 }}>
-          <path d="M8 20 L8 8 L20 8" fill="none" stroke="#e8121c" strokeWidth="1.5" opacity="0.8"/>
-          <path d="M calc(100% - 20) 8 L calc(100% - 8) 8 L calc(100% - 8) 20" fill="none" stroke="#e8121c" strokeWidth="1.5" opacity="0.8"/>
-          <path d="M8 calc(100% - 20) L8 calc(100% - 8) L20 calc(100% - 8)" fill="none" stroke="#e8121c" strokeWidth="1.5" opacity="0.8"/>
-          <path d="M calc(100% - 20) calc(100% - 8) L calc(100% - 8) calc(100% - 8) L calc(100% - 8) calc(100% - 20)" fill="none" stroke="#e8121c" strokeWidth="1.5" opacity="0.8"/>
           <line x1="50%" y1="44%" x2="50%" y2="56%" stroke="#e8121c" strokeWidth="0.8" opacity="0.6"/>
           <line x1="44%" y1="50%" x2="56%" y2="50%" stroke="#e8121c" strokeWidth="0.8" opacity="0.6"/>
           <circle cx="50%" cy="50%" r="3" fill="#e8121c" opacity="0.9"/>
@@ -891,7 +893,7 @@ export default function App() {
   });
   const [isFullscreen,setIsFullscreen] = useState(false);
   const hist = useRef({t:[],pitch:[],roll:[],yaw:[],alt:[],ax:[],ay:[],az:[],pressure:[]});
-  const [, setTick] = useState(0);
+  const [tick, setTick] = useState(0);
 
   const keyOk = usbKey === 'NEAL2026';
   const ctrl={1:'PID',2:'LQI',3:'MRAC',4:'ADRC'};
