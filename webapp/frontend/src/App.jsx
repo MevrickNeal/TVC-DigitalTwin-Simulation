@@ -13,7 +13,7 @@ import 'leaflet/dist/leaflet.css';
 const API = window.location.origin.includes('5173') ? 'http://localhost:8000' : window.location.origin;
 
 // ─── ROCKET 3D ────────────────────────────────────────────────────────────────
-function RocketModel({ pitch = 0, delta = 0, isFiring = false }) {
+function RocketModel({ pitch = 0, roll = 0, yaw = 0, deltaPitch = 0, deltaYaw = 0, isFiring = false }) {
   const flameRef = useRef();
   const mtl = useLoader(MTLLoader, '/ProjectNeal1.2.mtl', (loader) => {
     loader.setResourcePath('/ProjectNeal1.2_img/');
@@ -102,9 +102,9 @@ function RocketModel({ pitch = 0, delta = 0, isFiring = false }) {
   });
   const S = model.userData.SCALE;
   return (
-    <group rotation={[pitch, 0, 0]}>
+    <group rotation={[pitch, yaw, roll]}>
       <group scale={[S,S,S]} rotation={[-Math.PI/2,0,0]}><primitive object={model}/></group>
-      <group position={[0,NY,0]} rotation={[delta,0,0]}>
+      <group position={[0,NY,0]} rotation={[deltaPitch, 0, deltaYaw]}>
         <mesh><torusGeometry args={[BR*0.88,0.025,16,48]}/><meshStandardMaterial color="#3a3a4a" metalness={0.95} roughness={0.1}/></mesh>
         <mesh position={[0,-0.3,0]}><cylinderGeometry args={[BR*0.54,BR*0.88,0.58,40]}/><meshStandardMaterial color="#0d0d14" metalness={0.95} roughness={0.1}/></mesh>
         <mesh position={[0,-0.05,0]}><cylinderGeometry args={[BR*0.5,BR*0.5,0.06,32]}/><meshStandardMaterial color="#7f1d1d" emissive="#e8121c" emissiveIntensity={isFiring?4:0.4} roughness={1} metalness={0}/></mesh>
@@ -118,6 +118,25 @@ function RocketModel({ pitch = 0, delta = 0, isFiring = false }) {
         )}
       </group>
     </group>
+  );
+}
+
+
+// ─── TRAJECTORY 3D LINE ────────────────────────────────────────────────────────
+function TrajectoryLine({ points }) {
+  const lineGeometry = useMemo(() => {
+    if (points.length < 2) return null;
+    const pts = points.map(p => new THREE.Vector3(p[0], p[1], p[2]));
+    return new THREE.BufferGeometry().setFromPoints(pts);
+  }, [points]);
+
+  if (!lineGeometry) return null;
+
+  return (
+    <line>
+      <primitive object={lineGeometry} attach="geometry" />
+      <lineBasicMaterial color="#e8121c" linewidth={2} />
+    </line>
   );
 }
 
@@ -698,6 +717,37 @@ export default function App() {
   const coastTime = !state.isFiring ? Math.max(0, time - params.burn_time_s) : 0;
   const adrcEst = Math.abs(state.dd * 1.35 + (Math.random() * 0.1 - 0.05));
 
+  const liveMode = !!telem;
+  const currentPitch = liveMode ? (telem.orientation.pitch_deg * Math.PI / 180) : state.pitch;
+  const currentRoll = liveMode ? (telem.orientation.roll_deg * Math.PI / 180) : (simData ? (simData.roll[Math.min(Math.floor((time/(simData.t[simData.t.length-1]||1))*(simData.t.length-1)),simData.t.length-1)]*Math.PI)/180 : 0);
+  const currentYaw = liveMode ? (telem.orientation.yaw_deg * Math.PI / 180) : (simData ? (simData.yaw[Math.min(Math.floor((time/(simData.t[simData.t.length-1]||1))*(simData.t.length-1)),simData.t.length-1)]*Math.PI)/180 : 0);
+  
+  const currentDeltaP = liveMode ? ((telem.actuators?.servo_pitch_us - 1500)/500 * params.gimbal_limit * Math.PI / 180) : state.delta;
+  const currentDeltaY = liveMode ? ((telem.actuators?.servo_yaw_us - 1500)/500 * params.gimbal_limit * Math.PI / 180) : (simData ? ((simData.delta_y ? simData.delta_y[Math.min(Math.floor((time/(simData.t[simData.t.length-1]||1))*(simData.t.length-1)),simData.t.length-1)] : 0)*Math.PI)/180 : 0);
+
+  const currentAlt = liveMode ? altM : state.alt;
+  const currentDriftX = liveMode ? 0 : state.drift;
+  const currentDriftY = 0;
+  const motorFiring = liveMode ? launch.launched : state.isFiring;
+
+  // Generate Trajectory Points
+  const trajectoryPoints = useMemo(() => {
+    if (liveMode) {
+      return hist.current.alt.map((altVal, idx) => {
+        return [0, altVal * 0.01, 0];
+      });
+    } else {
+      if (!simData) return [];
+      const max = simData.t[simData.t.length - 1];
+      const currentIdx = Math.min(Math.floor((time / max) * (simData.t.length - 1)), simData.t.length - 1);
+      const pts = [];
+      for (let i = 0; i <= currentIdx; i++) {
+        pts.push([simData.drift_x[i] * 0.1, simData.altitude[i] * 0.01, simData.drift_y ? simData.drift_y[i] * 0.1 : 0]);
+      }
+      return pts;
+    }
+  }, [simData, time, liveMode, tick]);
+
   const arm=async()=>{ if(!keyOk&&!launch.armed)return; axios.post(`${API}/api/launch/arm`,{arm:!launch.armed}); };
   const go=async()=>axios.post(`${API}/api/launch/start_countdown`);
   const rst=async()=>{ axios.post(`${API}/api/launch/reset`); setUsbKey(''); };
@@ -713,12 +763,12 @@ export default function App() {
     <div style={{minHeight:'100vh',background:'#090d16',fontFamily:'Inter, system-ui, sans-serif',display:'flex',flexDirection:'column'}}>
 
       {/* ═══ NAVBAR ═══════════════════════════════════════════════════════════ */}
-      <nav style={{position:'sticky',top:0,zIndex:100,background:'#0a0f1c',borderBottom:'1px solid rgba(255,255,255,0.07)',display:'flex',alignItems:'stretch',height:52,flexShrink:0}}>
+      <nav style={{position:'sticky',top:0,zIndex:100,background:'#ffffff',borderBottom:'1px solid rgba(0,0,0,0.08)',display:'flex',alignItems:'stretch',height:52,flexShrink:0}}>
         {/* Logo */}
-        <div style={{display:'flex',alignItems:'center',gap:10,padding:'0 16px',borderRight:'1px solid rgba(255,255,255,0.07)',flexShrink:0}}>
+        <div style={{display:'flex',alignItems:'center',gap:10,padding:'0 16px',borderRight:'1px solid rgba(0,0,0,0.08)',flexShrink:0}}>
           <img src="/logo.png" alt="Project Neal" style={{height:26,objectFit:'contain'}}/>
           <div>
-            <div style={{fontFamily:'Orbitron, sans-serif',fontSize:10,fontWeight:800,letterSpacing:'0.14em',color:'#f0f4f8'}}>
+            <div style={{fontFamily:'Orbitron, sans-serif',fontSize:10,fontWeight:800,letterSpacing:'0.14em',color:'#090d16'}}>
               PROJECT <span style={{color:'#e8121c'}}>NEAL</span>
             </div>
             <div style={{fontFamily:'JetBrains Mono',fontSize:6.5,color:'#475569',letterSpacing:'0.1em'}}>TVC DIGITAL TWIN v2.0</div>
@@ -726,10 +776,10 @@ export default function App() {
         </div>
 
         {/* Countdown Timer */}
-        <div style={{display:'flex',alignItems:'center',padding:'0 14px',borderRight:'1px solid rgba(255,255,255,0.07)',flexShrink:0}}>
+        <div style={{display:'flex',alignItems:'center',padding:'0 14px',borderRight:'1px solid rgba(0,0,0,0.08)',flexShrink:0}}>
           <div style={{
             fontFamily:'Orbitron, sans-serif', fontSize:18, fontWeight:900, letterSpacing:'0.06em',
-            color: launch.countdown_active ? '#e8121c' : launch.launched ? '#10b981' : '#4b5563',
+            color: launch.countdown_active ? '#e8121c' : launch.launched ? '#10b981' : '#1e293b',
             textShadow: launch.countdown_active ? '0 0 16px rgba(232,18,28,0.6)' : 'none',
             transition:'color 0.3s, text-shadow 0.3s',
           }}>
@@ -744,7 +794,7 @@ export default function App() {
               display:'flex',alignItems:'center',gap:5,padding:'0 12px',
               background:'transparent',border:'none',borderBottom:tab===t.id?'2px solid #e8121c':'2px solid transparent',
               cursor:'pointer',fontFamily:'JetBrains Mono',fontSize:7.5,fontWeight:tab===t.id?700:400,
-              letterSpacing:'0.08em',color:tab===t.id?'#e8121c':'#6b7280',whiteSpace:'nowrap',
+              letterSpacing:'0.08em',color:tab===t.id?'#e8121c':'#334155',whiteSpace:'nowrap',
               transition:'color 0.15s',marginBottom:-1}}>
               {t.id==='launch'&&launch.armed&&<span style={{width:4,height:4,borderRadius:'50%',background:'#f59e0b'}}/>}
               {t.label}
@@ -753,19 +803,19 @@ export default function App() {
         </div>
 
         {/* Right section */}
-        <div style={{display:'flex',alignItems:'center',gap:7,padding:'0 12px',borderLeft:'1px solid rgba(255,255,255,0.07)',flexShrink:0}}>
+        <div style={{display:'flex',alignItems:'center',gap:7,padding:'0 12px',borderLeft:'1px solid rgba(0,0,0,0.08)',flexShrink:0}}>
           <div style={{display:'flex',alignItems:'center',gap:4,padding:'2px 7px',borderRadius:4,
-            background:telem?'rgba(16,185,129,0.08)':'rgba(255,255,255,0.03)',
-            border:`1px solid ${telem?'rgba(16,185,129,0.3)':'rgba(255,255,255,0.07)'}`}}>
-            <div style={{width:5,height:5,borderRadius:'50%',background:telem?'#10b981':'#4b5563',
+            background:telem?'rgba(16,185,129,0.08)':'rgba(0,0,0,0.04)',
+            border:`1px solid ${telem?'rgba(16,185,129,0.3)':'rgba(0,0,0,0.12)'}`}}>
+            <div style={{width:5,height:5,borderRadius:'50%',background:telem?'#10b981':'#475569',
               animation:telem?'ledBlink 1.6s ease infinite':'none'}}/>
-            <span style={{fontFamily:'JetBrains Mono',fontSize:7,fontWeight:700,letterSpacing:'0.08em',color:telem?'#10b981':'#4b5563'}}>{telem?'LIVE':'OFFLINE'}</span>
+            <span style={{fontFamily:'JetBrains Mono',fontSize:7,fontWeight:700,letterSpacing:'0.08em',color:telem?'#10b981':'#475569'}}>{telem?'LIVE':'OFFLINE'}</span>
           </div>
           <Badge color="#f59e0b">{ctrl[params.controller_idx]}</Badge>
           <Btn onClick={runSim} disabled={loading}>{loading?'RUNNING...':'RUN SIM'}</Btn>
           <button onClick={()=>document.exitFullscreen().catch(()=>{})} title="Exit Fullscreen (F11)" style={{
-            padding:'5px 9px',background:'transparent',border:'1px solid rgba(255,255,255,0.08)',
-            borderRadius:4,color:'#475569',fontFamily:'JetBrains Mono',fontSize:8,fontWeight:700,
+            padding:'5px 9px',background:'transparent',border:'1px solid rgba(0,0,0,0.15)',
+            borderRadius:4,color:'#090d16',fontFamily:'JetBrains Mono',fontSize:8,fontWeight:700,
             cursor:'pointer',letterSpacing:'0.06em',display:'flex',alignItems:'center',gap:4,transition:'all 0.15s',
           }}>
             ⛶ EXIT
@@ -847,19 +897,37 @@ export default function App() {
                     <ambientLight intensity={1.8}/>
                     <directionalLight position={[12,20,15]} intensity={2.5} castShadow/>
                     <pointLight position={[-5,5,5]} intensity={0.8} color="#3b82f6"/>
-                    <OrbitControls enableZoom enablePan makeDefault/>
+                    <OrbitControls enableZoom={false} enableRotate={false} enablePan={false}/>
                     <Suspense fallback={null}>
-                      <RocketModel pitch={-state.pitch} delta={-state.delta} isFiring={state.isFiring}/>
+                      <group position={[currentDriftX * 0.1, currentAlt * 0.01, currentDriftY * 0.1]}>
+                        <RocketModel 
+                          pitch={-currentPitch} 
+                          roll={currentRoll} 
+                          yaw={currentYaw} 
+                          deltaPitch={-currentDeltaP} 
+                          deltaYaw={currentDeltaY} 
+                          isFiring={motorFiring}
+                        />
+                      </group>
+                      <TrajectoryLine points={trajectoryPoints} />
                     </Suspense>
                     <Environment preset="night"/>
                   </Canvas>
                   {/* HUD overlays */}
                   <div style={{position:'absolute',top:7,left:10,pointerEvents:'none'}}>
-                    <div style={{fontFamily:'JetBrains Mono',fontSize:7.5,color:'#3b82f6',marginBottom:2}}>PITCH: {state.pd?.toFixed(2)}°  |  GIMBAL: {state.dd?.toFixed(2)}°</div>
-                    <div style={{fontFamily:'JetBrains Mono',fontSize:7.5,color:'#10b981'}}>ALT: {state.alt?.toFixed(1)} m  |  DRIFT: {state.drift?.toFixed(2)} m</div>
+                    <div style={{fontFamily:'JetBrains Mono',fontSize:7.5,color:'#3b82f6',marginBottom:2}}>
+                      PITCH: {(currentPitch * 180 / Math.PI).toFixed(2)}°  |  GIMBAL: {(currentDeltaP * 180 / Math.PI).toFixed(2)}°
+                    </div>
+                    <div style={{fontFamily:'JetBrains Mono',fontSize:7.5,color:'#10b981'}}>
+                      ALT: {currentAlt.toFixed(1)} m  |  DRIFT: {currentDriftX.toFixed(2)} m
+                    </div>
                   </div>
                   <div style={{position:'absolute',bottom:7,right:10,pointerEvents:'none'}}>
-                    {[['X',state.pd?.toFixed(1),'#e8121c'],['Y','0.0','#10b981'],['Z',state.alt?.toFixed(0),'#3b82f6']].map(([axis,v,c])=>(
+                    {[
+                      ['X', currentDriftX.toFixed(2), '#e8121c'],
+                      ['Y', currentDriftY.toFixed(2), '#10b981'],
+                      ['Z', currentAlt.toFixed(0), '#3b82f6']
+                    ].map(([axis,v,c])=>(
                       <div key={axis} style={{display:'flex',gap:5,alignItems:'center',marginBottom:2}}>
                         <div style={{width:12,height:2,background:c,borderRadius:1}}/>
                         <span style={{fontFamily:'JetBrains Mono',fontSize:7.5,color:c}}>{axis}: {v}</span>
