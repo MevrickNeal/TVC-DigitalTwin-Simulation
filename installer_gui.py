@@ -207,7 +207,7 @@ class SetupWizard:
 
     def download_tiles_to_install_dir(self, out_dir):
         import math, urllib.request
-        lat, lon = 1.352083, 103.819839
+        lat, lon = 23.80388, 90.36277
         zmin, zmax = 8, 15
         radius = 4
         rate_limit_s = 0.03

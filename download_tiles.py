@@ -12,8 +12,8 @@ import argparse
 import urllib.request
 
 # ── Config ────────────────────────────────────────────────────────────────────
-DEFAULT_LAT  = 1.352083      # Default: Singapore (change to your launch site)
-DEFAULT_LON  = 103.819839
+DEFAULT_LAT  = 23.80388      # Default: Mirpur City Club Field, Dhaka, Bangladesh
+DEFAULT_LON  = 90.36277
 ZOOM_MIN     = 8
 ZOOM_MAX     = 16
 TILE_RADIUS  = 4             # tiles on each side of center per zoom level

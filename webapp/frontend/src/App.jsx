@@ -151,16 +151,213 @@ function AttCube({ pitch=0, roll=0, yaw=0 }) {
     }
   });
   return (
-    <group ref={ref}>
-      <mesh><boxGeometry args={[1.6,1.6,1.6]}/><meshStandardMaterial color="#1a2130" metalness={0.5} roughness={0.4}/></mesh>
-      <lineSegments><edgesGeometry args={[new THREE.BoxGeometry(1.62,1.62,1.62)]}/><lineBasicMaterial color="#e8121c"/></lineSegments>
-      <mesh position={[0,1.0,0]}><coneGeometry args={[0.14,0.38,6]}/><meshBasicMaterial color="#10b981"/></mesh>
+    <group ref={ref} scale={[0.55, 0.55, 0.55]} position={[0, -0.3, 0]}>
+      <RocketModel pitch={0} roll={0} yaw={0} isFiring={false}/>
+    </group>
+  );
+}
+
+// ─── FLYING ENVIRONMENT ────────────────────────────────────────────────────────
+function FlyingEnvironment() {
+  const groupRef = useRef();
+  const count = 30;
+  const points = useMemo(() => {
+    const pts = [];
+    for (let i = 0; i < count; i++) {
+      pts.push({
+        pos: [Math.random() * 8 - 4, Math.random() * 12 - 6, Math.random() * 8 - 4],
+        speed: 2 + Math.random() * 3
+      });
+    }
+    return pts;
+  }, []);
+
+  useFrame((state, delta) => {
+    if (groupRef.current) {
+      groupRef.current.children.forEach((child, i) => {
+        const pt = points[i];
+        child.position.y -= pt.speed * delta * 5;
+        if (child.position.y < -6) {
+          child.position.y = 6;
+        }
+      });
+    }
+  });
+
+  return (
+    <group ref={groupRef}>
+      {points.map((pt, i) => (
+        <mesh key={i} position={pt.pos}>
+          <sphereGeometry args={[0.04, 8, 8]} />
+          <meshBasicMaterial color="#ffffff" transparent opacity={0.3} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+// ─── SIMULATOR ROCKET ──────────────────────────────────────────────────────────
+function SimulatorRocket({ tvcState, windForce, dragCoeff, controllerIdx, padActive, padPitch, padYaw, setPadPitch, setPadYaw }) {
+  const ref = useRef();
+
+  useFrame((state, delta) => {
+    const dt = Math.min(delta, 0.05);
+
+    if (tvcState.current.dragging) {
+      if (tvcState.current.dragType === 'nose') {
+        const Kp = controllerIdx === 4 ? 12.0 : 8.0;
+        const Kd = controllerIdx === 4 ? 4.0 : 2.5;
+        tvcState.current.deltaP = Math.max(-0.25, Math.min(0.25, - (Kp * tvcState.current.thetaP + Kd * tvcState.current.omegaP) * 0.15));
+        tvcState.current.deltaY = Math.max(-0.25, Math.min(0.25, - (Kp * tvcState.current.thetaY + Kd * tvcState.current.omegaY) * 0.15));
+      } else if (tvcState.current.dragType === 'nozzle') {
+        const I = 0.25;
+        const F = 15.0;
+        const d = 0.5;
+        const T_tvc_p = - F * d * Math.sin(tvcState.current.deltaP);
+        const T_tvc_y = - F * d * Math.sin(tvcState.current.deltaY);
+        const T_aero_p = - dragCoeff * tvcState.current.thetaP;
+        const T_aero_y = - dragCoeff * tvcState.current.thetaY;
+
+        const thetaP_ddot = (T_tvc_p + T_aero_p) / I;
+        const thetaY_ddot = (T_tvc_y + T_aero_y) / I;
+
+        tvcState.current.omegaP += thetaP_ddot * dt;
+        tvcState.current.thetaP += tvcState.current.omegaP * dt;
+        tvcState.current.omegaY += thetaY_ddot * dt;
+        tvcState.current.thetaY += tvcState.current.omegaY * dt;
+
+        tvcState.current.omegaP *= 0.98;
+        tvcState.current.omegaY *= 0.98;
+      }
+    } else {
+      let Kp = 8.0;
+      let Kd = 2.5;
+      if (controllerIdx === 4) { Kp = 12.0; Kd = 4.0; }
+      else if (controllerIdx === 2) { Kp = 9.0; Kd = 3.0; }
+      else if (controllerIdx === 3) { Kp = 7.0; Kd = 2.0; }
+
+      const extDistP = padActive ? (padPitch * Math.PI / 180) : 0;
+      const extDistY = padActive ? (padYaw * Math.PI / 180) : 0;
+
+      const targetDeltaP = - (Kp * tvcState.current.thetaP + Kd * tvcState.current.omegaP);
+      const targetDeltaY = - (Kp * tvcState.current.thetaY + Kd * tvcState.current.omegaY);
+
+      tvcState.current.deltaP += (targetDeltaP - tvcState.current.deltaP) * 15.0 * dt;
+      tvcState.current.deltaY += (targetDeltaY - tvcState.current.deltaY) * 15.0 * dt;
+
+      tvcState.current.deltaP = Math.max(-0.25, Math.min(0.25, tvcState.current.deltaP));
+      tvcState.current.deltaY = Math.max(-0.25, Math.min(0.25, tvcState.current.deltaY));
+
+      const I = 0.25;
+      const F = 15.0;
+      const d = 0.5;
+
+      const T_tvc_p = - F * d * Math.sin(tvcState.current.deltaP);
+      const T_tvc_y = - F * d * Math.sin(tvcState.current.deltaY);
+      const T_aero_p = - dragCoeff * tvcState.current.thetaP;
+      const T_aero_y = - dragCoeff * tvcState.current.thetaY;
+
+      const t = state.clock.getElapsedTime();
+      const T_wind_p = windForce * Math.sin(t * 2.0) + extDistP * 2.0;
+      const T_wind_y = windForce * Math.cos(t * 1.5) + extDistY * 2.0;
+
+      const thetaP_ddot = (T_tvc_p + T_aero_p + T_wind_p) / I;
+      const thetaY_ddot = (T_tvc_y + T_aero_y + T_wind_y) / I;
+
+      tvcState.current.omegaP += thetaP_ddot * dt;
+      tvcState.current.thetaP += tvcState.current.omegaP * dt;
+      tvcState.current.omegaY += thetaY_ddot * dt;
+      tvcState.current.thetaY += tvcState.current.omegaY * dt;
+
+      tvcState.current.omegaP *= 0.98;
+      tvcState.current.omegaY *= 0.98;
+    }
+
+    if (ref.current) {
+      ref.current.rotation.x = tvcState.current.thetaP;
+      ref.current.rotation.z = tvcState.current.thetaY;
+    }
+  });
+
+  const handlePointerDown = (type, e) => {
+    e.stopPropagation();
+    e.target.setPointerCapture(e.pointerId);
+    tvcState.current.dragging = true;
+    tvcState.current.dragType = type;
+    tvcState.current.startX = e.clientX;
+    tvcState.current.startY = e.clientY;
+    tvcState.current.startValP = type === 'nose' ? tvcState.current.thetaP : tvcState.current.deltaP;
+    tvcState.current.startValY = type === 'nose' ? tvcState.current.thetaY : tvcState.current.deltaY;
+  };
+
+  const handlePointerMove = (e) => {
+    if (!tvcState.current.dragging) return;
+    e.stopPropagation();
+    const dx = e.clientX - tvcState.current.startX;
+    const dy = e.clientY - tvcState.current.startY;
+
+    if (tvcState.current.dragType === 'nose') {
+      tvcState.current.thetaY = tvcState.current.startValY + dx * 0.005;
+      tvcState.current.thetaP = tvcState.current.startValP - dy * 0.005;
+      tvcState.current.thetaP = Math.max(-0.4, Math.min(0.4, tvcState.current.thetaP));
+      tvcState.current.thetaY = Math.max(-0.4, Math.min(0.4, tvcState.current.thetaY));
+    } else {
+      tvcState.current.deltaY = tvcState.current.startValY + dx * 0.003;
+      tvcState.current.deltaP = tvcState.current.startValP - dy * 0.003;
+      tvcState.current.deltaP = Math.max(-0.25, Math.min(0.25, tvcState.current.deltaP));
+      tvcState.current.deltaY = Math.max(-0.25, Math.min(0.25, tvcState.current.deltaY));
+    }
+  };
+
+  const handlePointerUp = (e) => {
+    if (tvcState.current.dragging) {
+      e.stopPropagation();
+      e.target.releasePointerCapture(e.pointerId);
+      tvcState.current.dragging = false;
+    }
+  };
+
+  return (
+    <group ref={ref} scale={[0.85, 0.85, 0.85]}>
+      <RocketModel 
+        pitch={0} 
+        roll={0} 
+        yaw={0} 
+        deltaPitch={tvcState.current.deltaP} 
+        deltaYaw={tvcState.current.deltaY} 
+        isFiring={true} 
+      />
+
+      {/* Nose cone interactive grabber */}
+      <mesh 
+        position={[0, 1.8, 0]} 
+        onPointerDown={(e) => handlePointerDown('nose', e)}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+      >
+        <sphereGeometry args={[0.48, 16, 16]} />
+        <meshBasicMaterial color="#3b82f6" transparent opacity={0.0} />
+      </mesh>
+
+      {/* Nozzle interactive grabber */}
+      <mesh 
+        position={[0, -1.8, 0]} 
+        onPointerDown={(e) => handlePointerDown('nozzle', e)}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+      >
+        <sphereGeometry args={[0.38, 16, 16]} />
+        <meshBasicMaterial color="#e8121c" transparent opacity={0.0} />
+      </mesh>
     </group>
   );
 }
 
 // ─── CHART ─────────────────────────────────────────────────────────────────────
 function Chart({ data, extra={} }) {
+  const [hoverIdx, setHoverIdx] = useState(null);
+  const [hoverX, setHoverX] = useState(0);
+
   if (!data || data.length === 0) return null;
   const traces = useMemo(() => {
     return data.map(t => {
@@ -200,9 +397,35 @@ function Chart({ data, extra={} }) {
   const scaleX = (xVal) => padding.left + ((xVal - bounds.minX) / (bounds.maxX - bounds.minX)) * plotWidth;
   const scaleY = (yVal) => padding.top + (1 - (yVal - bounds.minY) / (bounds.maxY - bounds.minY)) * plotHeight;
 
+  const handleMouseMove = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const pct = (x - (padding.left / width) * rect.width) / ((plotWidth / width) * rect.width);
+    if (pct >= 0 && pct <= 1) {
+      const len = traces[0]?.x?.length || 0;
+      if (len > 0) {
+        const idx = Math.max(0, Math.min(len - 1, Math.round(pct * (len - 1))));
+        setHoverIdx(idx);
+        setHoverX(scaleX(traces[0].x[idx]));
+      }
+    } else {
+      setHoverIdx(null);
+    }
+  };
+
+  const handleMouseLeave = () => {
+    setHoverIdx(null);
+  };
+
   return (
-    <div style={{ width: '100%', height: '100%', position: 'relative' }}>
+    <div style={{ width: '100%', height: '100%', position: 'relative' }} onMouseMove={handleMouseMove} onMouseLeave={handleMouseLeave}>
       <svg viewBox={`0 0 ${width} ${height}`} width="100%" height="100%" style={{ overflow: 'visible' }}>
+        <defs>
+          <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="1" result="blur" />
+            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+          </filter>
+        </defs>
         {[0, 0.5, 1.0].map((r, i) => {
           const yVal = bounds.minY + r * (bounds.maxY - bounds.minY);
           const yPos = scaleY(yVal);
@@ -260,11 +483,65 @@ function Chart({ data, extra={} }) {
           return (
             <g key={idx}>
               {t.fill === 'tozeroy' && pathD && <path d={areaD} fill={fillCol} stroke="none" style={{ opacity: 0.8 }}/>}
-              {pathD && <path d={pathD} fill="none" stroke={lineColor} strokeWidth={t.line.width || 1.2} strokeDasharray={lineDash}/>}
+              {pathD && <path d={pathD} fill="none" stroke={lineColor} strokeWidth={t.line.width || 1.2} strokeDasharray={lineDash} filter="url(#glow)"/>}
             </g>
           );
         })}
+
+        {hoverIdx !== null && (
+          <g>
+            <line x1={hoverX} y1={padding.top} x2={hoverX} y2={height - padding.bottom} stroke="rgba(232,18,28,0.4)" strokeWidth={0.8} strokeDasharray="3,3" />
+            {traces.map((t, idx) => {
+              if (t.type === 'bar') return null;
+              const valY = t.y[hoverIdx];
+              const py = scaleY(valY);
+              const lineColor = t.line.color || '#e8121c';
+              return (
+                <g key={idx}>
+                  <circle cx={hoverX} cy={py} r={3} fill="#090d16" stroke={lineColor} strokeWidth={1} />
+                  <circle cx={hoverX} cy={py} r={1.2} fill={lineColor} />
+                </g>
+              );
+            })}
+          </g>
+        )}
       </svg>
+
+      {hoverIdx !== null && traces[0] && (
+        <div style={{
+          position: 'absolute',
+          top: 6,
+          left: hoverX > width * 0.6 ? 24 : width - 90,
+          background: 'rgba(9, 13, 22, 0.95)',
+          border: '1px solid rgba(255, 255, 255, 0.08)',
+          borderRadius: 4,
+          padding: '4px 6px',
+          pointerEvents: 'none',
+          zIndex: 50,
+          fontFamily: 'JetBrains Mono',
+          fontSize: 6.5,
+          color: '#f0f4f8',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 2,
+          boxShadow: '0 4px 12px rgba(0,0,0,0.5)'
+        }}>
+          <div style={{ color: '#64748b', fontSize: 6 }}>T: {traces[0].x[hoverIdx].toFixed(2)}s</div>
+          {traces.map((t, idx) => {
+            const valY = t.y[hoverIdx];
+            const lineColor = t.line.color || '#e8121c';
+            return (
+              <div key={idx} style={{ display: 'flex', gap: 6, justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                  <span style={{ width: 4, height: 4, borderRadius: '50%', background: lineColor }} />
+                  {t.name.toUpperCase()}
+                </span>
+                <span style={{ fontWeight: 700, color: lineColor }}>{valY.toFixed(2)}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -600,6 +877,18 @@ export default function App() {
   const [telem,setTelem] = useState(null);
   const [launch,setLaunch] = useState({armed:false,countdown_active:false,remaining_seconds:30,launched:false});
   const [usbKey,setUsbKey] = useState('');
+  const [windForce, setWindForce] = useState(0.3);
+  const [dragCoeff, setDragCoeff] = useState(0.12);
+  const tvcSimState = useRef({
+    thetaP: 0,
+    omegaP: 0,
+    thetaY: 0,
+    omegaY: 0,
+    deltaP: 0,
+    deltaY: 0,
+    dragging: false,
+    dragType: null,
+  });
   const [isFullscreen,setIsFullscreen] = useState(false);
   const hist = useRef({t:[],pitch:[],roll:[],yaw:[],alt:[],ax:[],ay:[],az:[],pressure:[]});
   const [, setTick] = useState(0);
@@ -653,6 +942,40 @@ export default function App() {
   };
 
   useEffect(()=>{ runSim(); },[]);
+
+  const speak = (txt) => {
+    try {
+      const synth = window.speechSynthesis;
+      if (!synth) return;
+      synth.cancel();
+      const utter = new SpeechSynthesisUtterance(txt);
+      const voices = synth.getVoices();
+      const femaleVoice = voices.find(v => v.name.toLowerCase().includes('female') || v.name.toLowerCase().includes('zira') || v.name.toLowerCase().includes('google us english') || v.name.toLowerCase().includes('natural') || v.name.toLowerCase().includes('hazel') || v.name.toLowerCase().includes('samantha'));
+      if (femaleVoice) utter.voice = femaleVoice;
+      utter.rate = 1.1; // count down at a natural, crisp pace
+      synth.speak(utter);
+    } catch {}
+  };
+
+  const lastSpokenSec = useRef(-1);
+  useEffect(() => {
+    if (launch.countdown_active) {
+      const sec = Math.floor(launch.remaining_seconds);
+      if (sec !== lastSpokenSec.current && sec >= 0 && sec <= 10) {
+        lastSpokenSec.current = sec;
+        if (sec === 0) {
+          speak("Liftoff");
+        } else {
+          speak(String(sec));
+        }
+      }
+    } else if (launch.launched && lastSpokenSec.current !== 0) {
+      lastSpokenSec.current = 0;
+      speak("Liftoff");
+    } else if (!launch.countdown_active && !launch.launched) {
+      lastSpokenSec.current = -1;
+    }
+  }, [launch.countdown_active, launch.remaining_seconds, launch.launched]);
 
   useEffect(()=>{
     if(!simData||!playing) return;
@@ -710,8 +1033,8 @@ export default function App() {
   const totalG=Math.sqrt(ax*ax+ay*ay+az*az);
   const altM=telem?.altitude_m??0;
   const pressHpa=101325*Math.pow(1-2.25577e-5*Math.max(0,altM),5.25588)/100;
-  const gpsLat=telem?.gps?.lat??1.352083;
-  const gpsLon=telem?.gps?.lon??103.819839;
+  const gpsLat=telem?.gps?.lat??23.80388;
+  const gpsLon=telem?.gps?.lon??90.36277;
   const servoP=telem?.actuators?((telem.actuators.servo_pitch_us-1500)/500*params.gimbal_limit):state.dd;
   const servoY=telem?.actuators?((telem.actuators.servo_yaw_us-1500)/500*params.gimbal_limit):0;
   const coastTime = !state.isFiring ? Math.max(0, time - params.burn_time_s) : 0;
@@ -893,6 +1216,20 @@ export default function App() {
 
                 {/* 3D Canvas */}
                 <div style={{flex:1,position:'relative',minHeight:0}}>
+                  {/* Notch Timer */}
+                  <div style={{
+                    position:'absolute', top:0, left:'50%', transform:'translateX(-50%)',
+                    background:'#090d16', borderBottomLeftRadius:8, borderBottomRightRadius:8,
+                    border:'1px solid rgba(232,18,28,0.3)', borderTop:'none',
+                    padding:'3px 14px 5px', display:'flex', alignItems:'center', justifyContent:'center', zIndex:10
+                  }}>
+                    <span style={{
+                      fontFamily:'"Courier New", Courier, monospace', fontSize:9, fontWeight:900, color:'#e8121c',
+                      letterSpacing:'0.12em', textShadow:'0 0 6px rgba(232,18,28,0.5)'
+                    }}>
+                      {launch.countdown_active ? `T-${Math.max(0, launch.remaining_seconds).toFixed(1)}s` : launch.launched ? `T+${time.toFixed(1)}s` : 'STANDBY T-30.0s'}
+                    </span>
+                  </div>
                   <Canvas camera={{position:[8,3,2],fov:40}} style={{background:'transparent'}}>
                     <ambientLight intensity={1.8}/>
                     <directionalLight position={[12,20,15]} intensity={2.5} castShadow/>
@@ -1037,32 +1374,8 @@ export default function App() {
 
         {/* ══════════ TVC SIMULATOR ════════════════════════════════════════════ */}
         {tab==='tvc'&&(
-          <div style={{display:'grid',gridTemplateColumns:'1fr 280px',gap:8}}>
-            <div style={{display:'flex',flexDirection:'column',gap:8}}>
-              <Panel style={{height:280,display:'flex',flexDirection:'column'}} title="Interactive TVC 3D View"
-                titleRight={<div style={{display:'flex',gap:6}}><Badge color="#3b82f6">P {padActive?padPitch.toFixed(1):state.pd?.toFixed(1)}°</Badge><Badge color="#e8121c">Y {padActive?padYaw.toFixed(1):'0.0'}°</Badge></div>}>
-                <div style={{flex:1,background:'#090d16',borderRadius:6,overflow:'hidden'}}>
-                  <Canvas camera={{position:[6,3,5],fov:45}}>
-                    <ambientLight intensity={2}/><directionalLight position={[10,15,10]} intensity={2}/>
-                    <OrbitControls enableZoom enablePan/>
-                    <Suspense fallback={null}><RocketModel pitch={padActive?(padPitch*Math.PI/180):-state.pitch} delta={padActive?(padYaw*Math.PI/180):-state.delta} isFiring/></Suspense>
-                    <Environment preset="studio"/>
-                  </Canvas>
-                </div>
-              </Panel>
-              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-                <Panel title="Pitch Response" style={{height:195}}>
-                  <div style={{height:148}}>
-                    {simData?<Chart data={[{x:simData.t,y:simData.theta,name:ctrl[params.controller_idx],mode:'lines',line:{color:'#3b82f6',width:2}},{x:simData.t,y:simData.t.map(()=>5),name:'Ref 5°',mode:'lines',line:{color:'#e8121c',width:1,dash:'dash'}}]} extra={{yaxis:{title:'deg'}}}/>:null}
-                  </div>
-                </Panel>
-                <Panel title="Gimbal Deflection" style={{height:195}}>
-                  <div style={{height:148}}>
-                    {simData?<Chart data={[{x:simData.t,y:simData.delta,name:'Gimbal',mode:'lines',line:{color:'#e8121c',width:2}},{x:simData.t,y:simData.t.map(()=>params.gimbal_limit),name:'Limit',mode:'lines',line:{color:'#f59e0b',width:1,dash:'dot'}},{x:simData.t,y:simData.t.map(()=>-params.gimbal_limit),name:'-Limit',mode:'lines',line:{color:'#f59e0b',width:1,dash:'dot'}}]}/>:null}
-                  </div>
-                </Panel>
-              </div>
-            </div>
+          <div style={{display:'grid',gridTemplateColumns:'270px 340px 1fr',gap:8}}>
+            {/* COLUMN 1: Inputs & Controls (270px) */}
             <div style={{display:'flex',flexDirection:'column',gap:8}}>
               <Panel title="TVC Control Pad">
                 <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:10}}>
@@ -1081,6 +1394,26 @@ export default function App() {
                   </div>
                 </div>
               </Panel>
+
+              <Panel title="Simulator Parameters">
+                <div style={{display:'flex',flexDirection:'column',gap:9}}>
+                  <div>
+                    <div style={{display:'flex',justifyContent:'space-between',marginBottom:3}}>
+                      <span style={{fontFamily:'JetBrains Mono',fontSize:7,color:'#475569'}}>WIND FORCE / DISTURBANCE</span>
+                      <span style={{fontFamily:'JetBrains Mono',fontSize:8,color:'#e8121c'}}>{windForce.toFixed(2)} N</span>
+                    </div>
+                    <input type="range" min="0" max="2" step="0.05" value={windForce} onChange={e=>setWindForce(+e.target.value)} style={{width:'100%',accentColor:'#e8121c',height:3}}/>
+                  </div>
+                  <div>
+                    <div style={{display:'flex',justifyContent:'space-between',marginBottom:3}}>
+                      <span style={{fontFamily:'JetBrains Mono',fontSize:7,color:'#475569'}}>DRAG COEFFICIENT</span>
+                      <span style={{fontFamily:'JetBrains Mono',fontSize:8,color:'#3b82f6'}}>{dragCoeff.toFixed(3)}</span>
+                    </div>
+                    <input type="range" min="0.01" max="0.5" step="0.01" value={dragCoeff} onChange={e=>setDragCoeff(+e.target.value)} style={{width:'100%',accentColor:'#3b82f6',height:3}}/>
+                  </div>
+                </div>
+              </Panel>
+
               <Panel title="DOF Mode">
                 <div style={{display:'flex',background:'#090d16',border:'1px solid rgba(255,255,255,0.05)',borderRadius:5,overflow:'hidden',marginBottom:8}}>
                   {[3,6].map(d=><button key={d} onClick={()=>{setDof(d);setTimeout(runSim,50);}} style={{flex:1,padding:'6px',background:dof===d?'#e8121c':'transparent',border:'none',color:dof===d?'#fff':'#64748b',fontFamily:'JetBrains Mono',fontSize:8,fontWeight:700,cursor:'pointer'}}>{d}-DOF</button>)}
@@ -1095,6 +1428,51 @@ export default function App() {
                       <div style={{fontFamily:'JetBrains Mono',fontSize:8,color:'#475569',marginTop:1}}>{c.d}</div>
                     </button>
                   ))}
+                </div>
+              </Panel>
+            </div>
+
+            {/* COLUMN 2: Interactive TVC 3D View (340px) */}
+            <Panel style={{height:550,display:'flex',flexDirection:'column'}} title="Interactive TVC 3D View"
+              titleRight={<div style={{display:'flex',gap:6}}><Badge color="#3b82f6">ACTIVE SIM</Badge></div>}>
+              <div style={{flex:1,background:'#090d16',borderRadius:6,overflow:'hidden',position:'relative'}}>
+                <Canvas camera={{position:[0,0,5.2],fov:42}}>
+                  <ambientLight intensity={1.8}/>
+                  <directionalLight position={[10,15,10]} intensity={2}/>
+                  <Suspense fallback={null}>
+                    <SimulatorRocket 
+                      tvcState={tvcSimState}
+                      windForce={windForce}
+                      dragCoeff={dragCoeff}
+                      controllerIdx={params.controller_idx}
+                      padActive={padActive}
+                      padPitch={padPitch}
+                      padYaw={padYaw}
+                      setPadPitch={setPadPitch}
+                      setPadYaw={setPadYaw}
+                    />
+                    <FlyingEnvironment />
+                  </Suspense>
+                  <Environment preset="studio"/>
+                </Canvas>
+                <div style={{position:'absolute',bottom:10,left:0,right:0,display:'flex',justifyContent:'center',pointerEvents:'none'}}>
+                  <div style={{background:'rgba(9,13,22,0.85)',border:'1px solid rgba(255,255,255,0.06)',padding:'5px 10px',borderRadius:4,fontFamily:'JetBrains Mono',fontSize:6.5,color:'#64748b',letterSpacing:'0.06em',textTransform:'uppercase',textAlign:'center'}}>
+                    🖱️ Drag Nose to Disturb | Drag Nozzle to Deflect
+                  </div>
+                </div>
+              </div>
+            </Panel>
+
+            {/* COLUMN 3: Pitch & Deflection Charts (Remaining 1fr) */}
+            <div style={{display:'flex',flexDirection:'column',gap:8}}>
+              <Panel title="Pitch Response" style={{height:271}}>
+                <div style={{height:224}}>
+                  {simData?<Chart data={[{x:simData.t,y:simData.theta,name:ctrl[params.controller_idx],mode:'lines',line:{color:'#3b82f6',width:2}},{x:simData.t,y:simData.t.map(()=>5),name:'Ref 5°',mode:'lines',line:{color:'#e8121c',width:1,dash:'dash'}}]} extra={{yaxis:{title:'deg'}}}/>:null}
+                </div>
+              </Panel>
+              <Panel title="Gimbal Deflection" style={{height:271}}>
+                <div style={{height:224}}>
+                  {simData?<Chart data={[{x:simData.t,y:simData.delta,name:'Gimbal',mode:'lines',line:{color:'#e8121c',width:2}},{x:simData.t,y:simData.t.map(()=>params.gimbal_limit),name:'Limit',mode:'lines',line:{color:'#f59e0b',width:1,dash:'dot'}},{x:simData.t,y:simData.t.map(()=>-params.gimbal_limit),name:'-Limit',mode:'lines',line:{color:'#f59e0b',width:1,dash:'dot'}}]}/>:null}
                 </div>
               </Panel>
             </div>
@@ -1233,13 +1611,28 @@ export default function App() {
                 <div style={{display:'flex',gap:9,justifyContent:'center',marginTop:22,flexWrap:'wrap'}}>
                   <button onClick={arm} disabled={!keyOk&&!launch.armed} style={{
                     padding:'8px 18px',
-                    background:launch.armed?'rgba(245,158,11,0.1)':(!keyOk?'rgba(255,255,255,0.02)':'transparent'),
-                    border:`1px solid ${launch.armed?'#f59e0b':(!keyOk?'rgba(255,255,255,0.06)':'rgba(255,255,255,0.12)')}`,
-                    borderRadius:5,color:launch.armed?'#f59e0b':(!keyOk?'#2d3748':'#94a3b8'),
-                    fontFamily:'JetBrains Mono',fontSize:9,fontWeight:700,cursor:(!keyOk&&!launch.armed)?'not-allowed':'pointer',
-                    letterSpacing:'0.1em',textTransform:'uppercase',transition:'all 0.2s',
+                    background:keyOk ? (launch.armed ? 'rgba(245,158,11,0.2)' : 'rgba(245,158,11,0.1)') : 'rgba(255,255,255,0.02)',
+                    border:`1px solid ${keyOk ? '#f59e0b' : 'rgba(255,255,255,0.06)'}`,
+                    borderRadius:5,
+                    color:keyOk ? '#f59e0b' : '#334155',
+                    fontFamily:'JetBrains Mono',fontSize:9,fontWeight:700,
+                    cursor:(!keyOk&&!launch.armed)?'not-allowed':'pointer',
+                    boxShadow:keyOk ? '0 0 10px rgba(245,158,11,0.35)' : 'none',
+                    letterSpacing:'0.15em',textTransform:'uppercase',transition:'all 0.2s',
                   }}>{launch.armed?'DISARM':'ARM'}</button>
-                  <Btn onClick={go} disabled={!launch.armed||launch.countdown_active}>START COUNTDOWN</Btn>
+                  
+                  <button onClick={go} disabled={!launch.armed||launch.countdown_active} style={{
+                    padding:'8px 18px',
+                    background:launch.armed ? '#10b981' : '#1f2937',
+                    border:'none',
+                    borderRadius:5,
+                    color:launch.armed ? '#fff' : '#4b5563',
+                    fontFamily:'JetBrains Mono',fontSize:9,fontWeight:700,
+                    cursor:(!launch.armed||launch.countdown_active)?'not-allowed':'pointer',
+                    boxShadow:launch.armed ? '0 0 15px rgba(16,185,129,0.5)' : 'none',
+                    letterSpacing:'0.15em',textTransform:'uppercase',transition:'all 0.2s',
+                  }}>START COUNTDOWN</button>
+
                   <button onClick={rst} style={{padding:'8px 14px',background:'transparent',border:'1px solid rgba(255,255,255,0.07)',borderRadius:5,color:'#64748b',fontFamily:'JetBrains Mono',fontSize:9,fontWeight:700,cursor:'pointer',textTransform:'uppercase'}}>RESET</button>
                 </div>
                 <div style={{display:'flex',gap:7,justifyContent:'center',marginTop:14,flexWrap:'wrap'}}>
