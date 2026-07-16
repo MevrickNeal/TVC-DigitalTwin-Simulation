@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, Suspense, useMemo, useCallback } from 'react';
 import axios from 'axios';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { OrbitControls, Environment } from '@react-three/drei';
+import { OrbitControls, Environment, Html } from '@react-three/drei';
 import { useLoader } from '@react-three/fiber';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader';
 import { MTLLoader } from 'three/examples/jsm/loaders/MTLLoader';
@@ -892,7 +892,7 @@ export default function App() {
     dragType: null,
   });
   const [isFullscreen,setIsFullscreen] = useState(false);
-  const hist = useRef({t:[],pitch:[],roll:[],yaw:[],alt:[],ax:[],ay:[],az:[],pressure:[]});
+  const hist = useRef({t:[],pitch:[],roll:[],yaw:[],alt:[],ax:[],ay:[],az:[],pressure:[],x:[],y:[]});
   const [tick, setTick] = useState(0);
 
   const keyOk = usbKey === 'NEAL2026';
@@ -1011,7 +1011,13 @@ export default function App() {
         h.az.push(tr.data.raw_accel?.az_g??1);
         const alt=tr.data.altitude_m??0;
         h.pressure.push(101325*Math.pow(1-2.25577e-5*Math.max(0,alt),5.25588)/100);
-        if(h.t.length>120) ['t','pitch','roll','yaw','alt','ax','ay','az','pressure'].forEach(k=>h[k].shift());
+        const latVal = tr.data.gps?.lat ?? 23.80388;
+        const lonVal = tr.data.gps?.lon ?? 90.36277;
+        const relX = (lonVal - 90.36277) * 111320 * Math.cos(23.80388 * Math.PI / 180);
+        const relY = (latVal - 23.80388) * 111000;
+        h.x.push(relX);
+        h.y.push(relY);
+        if(h.t.length>120) ['t','pitch','roll','yaw','alt','ax','ay','az','pressure','x','y'].forEach(k=>h[k].shift());
         setTick(n=>n+1);
       } catch {}
     };
@@ -1051,15 +1057,17 @@ export default function App() {
   const currentDeltaY = liveMode ? ((telem.actuators?.servo_yaw_us - 1500)/500 * params.gimbal_limit * Math.PI / 180) : (simData ? ((simData.delta_y ? simData.delta_y[Math.min(Math.floor((time/(simData.t[simData.t.length-1]||1))*(simData.t.length-1)),simData.t.length-1)] : 0)*Math.PI)/180 : 0);
 
   const currentAlt = liveMode ? altM : state.alt;
-  const currentDriftX = liveMode ? 0 : state.drift;
-  const currentDriftY = 0;
+  const currentDriftX = liveMode ? (hist.current.x[hist.current.x.length - 1] ?? 0) : state.drift;
+  const currentDriftY = liveMode ? (hist.current.y[hist.current.y.length - 1] ?? 0) : (simData ? (simData.drift_y ? simData.drift_y[Math.min(Math.floor((time/(simData.t[simData.t.length-1]||1))*(simData.t.length-1)),simData.t.length-1)] : 0) : 0);
   const motorFiring = liveMode ? launch.launched : state.isFiring;
 
   // Generate Trajectory Points
   const trajectoryPoints = useMemo(() => {
     if (liveMode) {
       return hist.current.alt.map((altVal, idx) => {
-        return [0, altVal * 0.01, 0];
+        const px = hist.current.x[idx] ?? 0;
+        const py = hist.current.y[idx] ?? 0;
+        return [px * 0.1, altVal * 0.01, py * 0.1];
       });
     } else {
       if (!simData) return [];
@@ -1232,11 +1240,53 @@ export default function App() {
                       {launch.countdown_active ? `T-${Math.max(0, launch.remaining_seconds).toFixed(1)}s` : launch.launched ? `T+${time.toFixed(1)}s` : 'STANDBY T-30.0s'}
                     </span>
                   </div>
-                  <Canvas camera={{position:[8,3,2],fov:40}} style={{background:'transparent'}}>
+                  <Canvas camera={{position:[10,7,10],fov:45}} style={{background:'transparent'}}>
                     <ambientLight intensity={1.8}/>
                     <directionalLight position={[12,20,15]} intensity={2.5} castShadow/>
                     <pointLight position={[-5,5,5]} intensity={0.8} color="#3b82f6"/>
-                    <OrbitControls enableZoom={false} enableRotate={false} enablePan={false}/>
+                    
+                    {/* Grid plane at ground level (Y=0) */}
+                    <gridHelper args={[24, 24, '#e8121c', '#1e293b']} position={[0,0,0]} />
+                    
+                    {/* 3D Coordinate Axis Lines using raw Three.js primitives */}
+                    <primitive object={new THREE.Line(
+                      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-12, 0, 0), new THREE.Vector3(12, 0, 0)]),
+                      new THREE.LineBasicMaterial({ color: '#ef4444' })
+                    )} />
+                    <primitive object={new THREE.Line(
+                      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, -12), new THREE.Vector3(0, 0, 12)]),
+                      new THREE.LineBasicMaterial({ color: '#10b981' })
+                    )} />
+                    <primitive object={new THREE.Line(
+                      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 10, 0)]),
+                      new THREE.LineBasicMaterial({ color: '#3b82f6', linewidth: 2 })
+                    )} />
+
+                    {/* 3D Labels */}
+                    <Html position={[0, 10.3, 0]} center>
+                      <div style={{ fontFamily: 'JetBrains Mono', fontSize: 6.5, color: '#3b82f6', background: '#090d16cc', padding: '2px 4px', border: '1px solid rgba(59,130,246,0.3)', borderRadius: 3, whiteSpace: 'nowrap' }}>
+                        ALT (m)
+                      </div>
+                    </Html>
+                    <Html position={[12.3, 0, 0]} center>
+                      <div style={{ fontFamily: 'JetBrains Mono', fontSize: 6.5, color: '#ef4444', background: '#090d16cc', padding: '2px 4px', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 3, whiteSpace: 'nowrap' }}>
+                        DRIFT X (m)
+                      </div>
+                    </Html>
+                    <Html position={[0, 0, 12.3]} center>
+                      <div style={{ fontFamily: 'JetBrains Mono', fontSize: 6.5, color: '#10b981', background: '#090d16cc', padding: '2px 4px', border: '1px solid rgba(16,185,129,0.3)', borderRadius: 3, whiteSpace: 'nowrap' }}>
+                        DRIFT Y (m)
+                      </div>
+                    </Html>
+
+                    {/* Altitude Ticks */}
+                    {[2, 4, 6, 8, 10].map(y => (
+                      <Html key={y} position={[-0.4, y, 0]} center>
+                        <div style={{ fontFamily: 'JetBrains Mono', fontSize: 5.5, color: '#64748b' }}>{y * 100}m</div>
+                      </Html>
+                    ))}
+
+                    <OrbitControls enableZoom={true} enableRotate={true} enablePan={true} target={[0, 4, 0]} maxPolarAngle={Math.PI / 2 - 0.05} />
                     <Suspense fallback={null}>
                       <group position={[currentDriftX * 0.1, currentAlt * 0.01, currentDriftY * 0.1]}>
                         <RocketModel 
