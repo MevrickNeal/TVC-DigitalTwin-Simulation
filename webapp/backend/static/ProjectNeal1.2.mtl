@@ -1,0 +1,140 @@
+newmtl mat_1_Nose Cone
+illum 2
+Ns 225.00002
+d 1.0
+Ka 0.0 0.0 0.0
+Kd 0.028991187 0.028991187 0.028991187
+Ks 0.25 0.25 0.25
+newmtl mat_2_Body Tube
+illum 2
+Ns 225.00002
+d 1.0
+Ka 0.0 0.0 0.0
+Kd 1.0 1.0 1.0
+Ks 0.25 0.25 0.25
+map_Kd -o 0.0 0.0 0.0 -s 1.0 1.0 1.0 -clamp off /textures/1.png
+newmtl mat_3_Inner Tube
+illum 2
+Ns 75.0
+d 1.0
+Ka 0.0 0.0 0.0
+Kd 0.39929333 0.29321617 0.17677432
+Ks 0.25 0.25 0.25
+map_Kd -o 0.0 0.0 0.0 -s 1.0 1.0 1.0 -clamp off /textures/spiral-wound-alpha.png
+newmtl mat_3_Inner Tube_G74W
+illum 2
+Ns 0.0
+d 1.0
+Ka 0.0 0.0 0.0
+Kd 5.0770527E-6 5.0770527E-6 5.0770527E-6
+Ks 0.25 0.25 0.25
+map_Kd -o 0.0 0.0 0.0 -s 1.0 1.0 1.0 -clamp off /textures/aerotech.png
+newmtl mat_4_Centering Ring
+illum 2
+Ns 0.0
+d 1.0
+Ka 0.0 0.0 0.0
+Kd 5.0770527E-6 5.0770527E-6 5.0770527E-6
+Ks 0.25 0.25 0.25
+map_Kd -o 0.0 0.0 0.0 -s 1.0 1.0 1.0 -clamp off /textures/wood.jpg
+newmtl mat_5_Centering Ring
+illum 2
+Ns 0.0
+d 1.0
+Ka 0.0 0.0 0.0
+Kd 5.0770527E-6 5.0770527E-6 5.0770527E-6
+Ks 0.25 0.25 0.25
+map_Kd -o 0.0 0.0 0.0 -s 1.0 1.0 1.0 -clamp off /textures/wood.jpg
+newmtl mat_6_Trapezoidal Fin Set
+illum 2
+Ns 225.00002
+d 1.0
+Ka 0.0 0.0 0.0
+Kd 1.0 0.0 0.028991187
+Ks 0.25 0.25 0.25
+map_Kd -o 0.0 0.0 0.0 -s 1.0 1.0 1.0 -clamp off /textures/fins.png
+newmtl mat_7_Parachute
+illum 2
+Ns 0.0
+d 1.0
+Ka 0.0 0.0 0.0
+Kd 5.0770527E-6 5.0770527E-6 5.0770527E-6
+Ks 0.25 0.25 0.25
+map_Kd -o 0.0 0.0 0.0 -s 1.0 1.0 1.0 -clamp off /textures/chute.jpg
+newmtl mat_8_Shock Cord
+illum 2
+Ns 0.0
+d 1.0
+Ka 0.0 0.0 0.0
+Kd 5.0770527E-6 5.0770527E-6 5.0770527E-6
+Ks 0.25 0.25 0.25
+map_Kd -o 0.0 0.0 0.0 -s 1.0 1.0 1.0 -clamp off /textures/wadding.png
+newmtl mat_9_Engine Block
+illum 2
+Ns 0.0
+d 1.0
+Ka 0.0 0.0 0.0
+Kd 5.0770527E-6 5.0770527E-6 5.0770527E-6
+Ks 0.25 0.25 0.25
+map_Kd -o 0.0 0.0 0.0 -s 1.0 1.0 1.0 -clamp off /textures/hardboard.jpg
+newmtl mat_10_Freeform Fin Set
+illum 2
+Ns 225.00002
+d 1.0
+Ka 0.0 0.0 0.0
+Kd 0.0 0.0 0.0
+Ks 0.25 0.25 0.25
+newmtl mat_11_Rail Button
+illum 2
+Ns 225.00002
+d 1.0
+Ka 0.0 0.0 0.0
+Kd 1.0 1.0 0.72267246
+Ks 0.25 0.25 0.25
+newmtl mat_12_Rail Button
+illum 2
+Ns 225.00002
+d 1.0
+Ka 0.0 0.0 0.0
+Kd 1.0 1.0 0.72267246
+Ks 0.25 0.25 0.25
+newmtl mat_13_Mass Component
+illum 2
+Ns 0.0
+d 1.0
+Ka 0.0 0.0 0.0
+Kd 5.0770527E-6 5.0770527E-6 5.0770527E-6
+Ks 0.25 0.25 0.25
+map_Kd -o 0.0 0.0 0.0 -s 1.0 1.0 1.0 -clamp off /textures/wadding.png
+newmtl mat_14_Bulkhead
+illum 2
+Ns 0.0
+d 1.0
+Ka 0.0 0.0 0.0
+Kd 5.0770527E-6 5.0770527E-6 5.0770527E-6
+Ks 0.25 0.25 0.25
+map_Kd -o 0.0 0.0 0.0 -s 1.0 1.0 1.0 -clamp off /textures/wood.jpg
+newmtl mat_15_Bulkhead
+illum 2
+Ns 0.0
+d 1.0
+Ka 0.0 0.0 0.0
+Kd 5.0770527E-6 5.0770527E-6 5.0770527E-6
+Ks 0.25 0.25 0.25
+map_Kd -o 0.0 0.0 0.0 -s 1.0 1.0 1.0 -clamp off /textures/wood.jpg
+newmtl mat_16_Mass Component
+illum 2
+Ns 0.0
+d 1.0
+Ka 0.0 0.0 0.0
+Kd 5.0770527E-6 5.0770527E-6 5.0770527E-6
+Ks 0.25 0.25 0.25
+map_Kd -o 0.0 0.0 0.0 -s 1.0 1.0 1.0 -clamp off /textures/wadding.png
+newmtl mat_17_Bulkhead
+illum 2
+Ns 0.0
+d 1.0
+Ka 0.0 0.0 0.0
+Kd 5.0770527E-6 5.0770527E-6 5.0770527E-6
+Ks 0.25 0.25 0.25
+map_Kd -o 0.0 0.0 0.0 -s 1.0 1.0 1.0 -clamp off /textures/wood.jpg

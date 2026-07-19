@@ -895,6 +895,8 @@ export default function App() {
   const hist = useRef({t:[],pitch:[],roll:[],yaw:[],alt:[],ax:[],ay:[],az:[],pressure:[],x:[],y:[]});
   const [tick, setTick] = useState(0);
   const [packetLogs, setPacketLogs] = useState([]);
+  const [orkData, setOrkData] = useState(null);
+  const [orkFileName, setOrkFileName] = useState('ProjectNeal1.2.ork');
 
   const keyOk = usbKey === 'NEAL2026';
   const ctrl={1:'PID',2:'LQI',3:'MRAC',4:'ADRC'};
@@ -905,6 +907,7 @@ export default function App() {
     {id:'launch',label:'LAUNCH STATION'},
     {id:'vehicle',label:'VEHICLE CONFIG'},
     {id:'bench',label:'BENCHMARKS'},
+    {id:'openrocket',label:'OPENROCKET'},
     {id:'paper',label:'RESEARCH PAPER'},
   ];
 
@@ -932,6 +935,14 @@ export default function App() {
       window.removeEventListener('keydown', handleF11);
       document.removeEventListener('fullscreenchange', onFSChange);
     };
+  }, []);
+
+  // ── Load OpenRocket trajectory JSON on mount ───────────────────────────────
+  useEffect(() => {
+    fetch('/ork_trajectory.json')
+      .then(r => r.json())
+      .then(d => setOrkData(d))
+      .catch(() => {});
   }, []);
 
   // ── Simulation ────────────────────────────────────────────────────────────
@@ -1071,61 +1082,82 @@ export default function App() {
   const currentDriftY = liveMode ? (hist.current.y[hist.current.y.length - 1] ?? 0) : (simData ? (simData.drift_y ? simData.drift_y[Math.min(Math.floor((time/(simData.t[simData.t.length-1]||1))*(simData.t.length-1)),simData.t.length-1)] : 0) : 0);
   const motorFiring = liveMode ? launch.launched : state.isFiring;
 
+  // ─ ORK trajectory scale factors (real meters → 3D units) ─
+  // alt: 59.5m max → 7.14 units (good visual height)
+  // east/north: 72m max → 7.2 units (matching footprint)
+  const ORK_ALT_S  = 0.12;  // altitude scale
+  const ORK_POS_S  = 0.10;  // east/north scale
+  const ROCKET_BASE = 0.5;  // Y offset so rocket sits ON launchpad
+
   // Generate Trajectory Points
   const trajectoryPoints = useMemo(() => {
     if (liveMode) {
       return hist.current.alt.map((altVal, idx) => {
         const px = hist.current.x[idx] ?? 0;
         const py = hist.current.y[idx] ?? 0;
-        return [px * 0.1, altVal * 0.01, py * 0.1];
+        return [px * ORK_POS_S, ROCKET_BASE + altVal * ORK_ALT_S, py * ORK_POS_S];
       });
-    } else {
-      if (!simData) return [];
+    } else if (orkData) {
+      // Use real OpenRocket simulation data for trajectory
+      const max = orkData.t[orkData.t.length - 1];
+      const usedTime = simData ? time : Math.min(time, max);
+      const tSrc = orkData.t;
+      const currentIdx = Math.min(Math.floor((usedTime / max) * (tSrc.length - 1)), tSrc.length - 1);
+      const pts = [];
+      for (let i = 0; i <= currentIdx; i++) {
+        pts.push([
+          orkData.pos_east[i] * ORK_POS_S,
+          ROCKET_BASE + orkData.altitude[i] * ORK_ALT_S,
+          orkData.pos_north[i] * ORK_POS_S
+        ]);
+      }
+      return pts;
+    } else if (simData) {
       const max = simData.t[simData.t.length - 1];
       const currentIdx = Math.min(Math.floor((time / max) * (simData.t.length - 1)), simData.t.length - 1);
       const pts = [];
       for (let i = 0; i <= currentIdx; i++) {
-        pts.push([simData.drift_x[i] * 0.1, simData.altitude[i] * 0.01, simData.drift_y ? simData.drift_y[i] * 0.1 : 0]);
+        pts.push([simData.drift_x[i] * ORK_POS_S, ROCKET_BASE + simData.altitude[i] * ORK_ALT_S, simData.drift_y ? simData.drift_y[i] * ORK_POS_S : 0]);
       }
       return pts;
     }
-  }, [simData, time, liveMode, tick]);
+    return [];
+  }, [simData, orkData, time, liveMode, tick]);
 
   const apogeeInfo = useMemo(() => {
     if (liveMode) {
       let maxAlt = 0;
       let maxIdx = -1;
       hist.current.alt.forEach((altVal, idx) => {
-        if (altVal > maxAlt) {
-          maxAlt = altVal;
-          maxIdx = idx;
-        }
+        if (altVal > maxAlt) { maxAlt = altVal; maxIdx = idx; }
       });
       if (maxIdx === -1) return null;
       const px = hist.current.x[maxIdx] ?? 0;
       const py = hist.current.y[maxIdx] ?? 0;
       return {
-        pos: [px * 0.1, maxAlt * 0.01, py * 0.1],
+        pos: [px * 0.10, 0.5 + maxAlt * 0.12, py * 0.10],
         alt: maxAlt,
         time: hist.current.t[maxIdx] ?? 0
       };
+    } else if (orkData) {
+      let maxAlt = 0; let maxIdx = 0;
+      orkData.altitude.forEach((a, i) => { if (a > maxAlt) { maxAlt = a; maxIdx = i; } });
+      return {
+        pos: [orkData.pos_east[maxIdx] * 0.10, 0.5 + maxAlt * 0.12, orkData.pos_north[maxIdx] * 0.10],
+        alt: maxAlt,
+        time: orkData.t[maxIdx]
+      };
     } else {
       if (!simData) return null;
-      let maxAlt = 0;
-      let maxIdx = 0;
-      simData.altitude.forEach((altVal, idx) => {
-        if (altVal > maxAlt) {
-          maxAlt = altVal;
-          maxIdx = idx;
-        }
-      });
+      let maxAlt = 0; let maxIdx = 0;
+      simData.altitude.forEach((a, i) => { if (a > maxAlt) { maxAlt = a; maxIdx = i; } });
       return {
-        pos: [simData.drift_x[maxIdx] * 0.1, maxAlt * 0.01, simData.drift_y ? simData.drift_y[maxIdx] * 0.1 : 0],
+        pos: [simData.drift_x[maxIdx] * 0.10, 0.5 + maxAlt * 0.12, simData.drift_y ? simData.drift_y[maxIdx] * 0.10 : 0],
         alt: maxAlt,
         time: simData.t[maxIdx]
       };
     }
-  }, [simData, liveMode, tick]);
+  }, [simData, orkData, liveMode, tick]);
 
   useEffect(() => {
     if (liveMode || !playing || !simData) return;
@@ -1323,26 +1355,7 @@ export default function App() {
 
             </div>
 
-            {/* ── Bottom Chart Strip ── */}
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8}}>
-              <Panel title="Acceleration History — 3-Axis" accent="#3b82f6"
-                titleRight={<span style={{fontFamily:'JetBrains Mono',fontSize:7,color:'#475569'}}>30s WINDOW</span>}
-                style={{height:140}}>
-                <div style={{height:84}}><Chart data={[
-                  {x:hist.current.t,y:hist.current.ax,name:'Ax',mode:'lines',line:{color:'#3b82f6',width:1.5}},
-                  {x:hist.current.t,y:hist.current.ay,name:'Ay',mode:'lines',line:{color:'#8b5cf6',width:1.5}},
-                  {x:hist.current.t,y:hist.current.az,name:'Az',mode:'lines',line:{color:'#10b981',width:1.5}},
-                ]} extra={{yaxis:{title:'g'}}}/></div>
-              </Panel>
-              <Panel title="Altitude Profile" accent="#10b981" style={{height:140}}>
-                <div style={{height:84}}><Chart data={simData?[{x:simData.t,y:simData.altitude,fill:'tozeroy',mode:'lines',line:{color:'#10b981',width:2},fillcolor:'rgba(16,185,129,0.07)'}]:[{x:hist.current.t,y:hist.current.alt,fill:'tozeroy',mode:'lines',line:{color:'#10b981',width:1.5},fillcolor:'rgba(16,185,129,0.07)'}]}/></div>
-              </Panel>
-              <Panel title="Pressure History" accent="#f59e0b" style={{height:140}}>
-                <div style={{height:84}}><Chart data={[{x:hist.current.t,y:hist.current.pressure,fill:'tozeroy',mode:'lines',line:{color:'#f59e0b',width:1.5},fillcolor:'rgba(245,158,11,0.06)'}]} extra={{yaxis:{title:'hPa'}}}/></div>
-              </Panel>
-            </div>
-
-            {/* ── 3D Trajectory Visualizer (Widescreen panel, scroll down to see) ── */}
+            {/* ── 3D Trajectory Visualizer (MIDDLE — between avionics and charts) ── */}
             <Panel title="3D Trajectory Visualizer &amp; Flight Graph" accent="#e8121c">
               <div style={{display:'flex',gap:8,height:360}}>
                 {/* 3D Canvas */}
@@ -1395,26 +1408,26 @@ export default function App() {
                     {/* Altitude and Drift Projection Lines */}
                     <primitive object={new THREE.Line(
                       new THREE.BufferGeometry().setFromPoints([
-                        new THREE.Vector3(currentDriftX * 0.1, currentAlt * 0.01, currentDriftY * 0.1),
-                        new THREE.Vector3(currentDriftX * 0.1, 0, currentDriftY * 0.1)
+                        new THREE.Vector3(currentDriftX * ORK_POS_S, ROCKET_BASE + currentAlt * ORK_ALT_S, currentDriftY * ORK_POS_S),
+                        new THREE.Vector3(currentDriftX * ORK_POS_S, 0, currentDriftY * ORK_POS_S)
                       ]),
                       new THREE.LineBasicMaterial({ color: '#f59e0b', transparent: true, opacity: 0.6 })
                     )} />
                     <primitive object={new THREE.Line(
                       new THREE.BufferGeometry().setFromPoints([
-                        new THREE.Vector3(currentDriftX * 0.1, 0, currentDriftY * 0.1),
+                        new THREE.Vector3(currentDriftX * ORK_POS_S, 0, currentDriftY * ORK_POS_S),
                         new THREE.Vector3(0, 0, 0)
                       ]),
                       new THREE.LineBasicMaterial({ color: '#10b981', transparent: true, opacity: 0.6 })
                     )} />
 
                     {/* Floating Labels in 3D */}
-                    <Html position={[currentDriftX * 0.1, currentAlt * 0.005, currentDriftY * 0.1]} center>
+                    <Html position={[currentDriftX * ORK_POS_S, ROCKET_BASE + currentAlt * ORK_ALT_S * 0.5, currentDriftY * ORK_POS_S]} center>
                       <div style={{ fontFamily: 'JetBrains Mono', fontSize: 6, color: '#f59e0b', background: '#090d16cc', padding: '1px 3px', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 2, whiteSpace: 'nowrap' }}>
                         H: {currentAlt.toFixed(1)}m
                       </div>
                     </Html>
-                    <Html position={[currentDriftX * 0.05, 0, currentDriftY * 0.05]} center>
+                    <Html position={[currentDriftX * ORK_POS_S * 0.5, 0, currentDriftY * ORK_POS_S * 0.5]} center>
                       <div style={{ fontFamily: 'JetBrains Mono', fontSize: 6, color: '#10b981', background: '#090d16cc', padding: '1px 3px', border: '1px solid rgba(16,185,129,0.2)', borderRadius: 2, whiteSpace: 'nowrap' }}>
                         D: {Math.sqrt(currentDriftX*currentDriftX + currentDriftY*currentDriftY).toFixed(1)}m
                       </div>
@@ -1465,7 +1478,7 @@ export default function App() {
 
                     <OrbitControls enableZoom={true} enableRotate={true} enablePan={true} target={[0, 4, 0]} maxPolarAngle={Math.PI / 2 - 0.05} />
                     <Suspense fallback={null}>
-                      <group position={[currentDriftX * 0.1, currentAlt * 0.01, currentDriftY * 0.1]}>
+                      <group position={[currentDriftX * ORK_POS_S, ROCKET_BASE + currentAlt * ORK_ALT_S, currentDriftY * ORK_POS_S]}>
                         <RocketModel 
                           pitch={-currentPitch} 
                           roll={currentRoll} 
@@ -1525,6 +1538,28 @@ export default function App() {
                 </div>
               </div>
             </Panel>
+
+            {/* ── Bottom Chart Strip ── */}
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8}}>
+              <Panel title="Acceleration History — 3-Axis" accent="#3b82f6"
+                titleRight={<span style={{fontFamily:'JetBrains Mono',fontSize:7,color:'#475569'}}>30s WINDOW</span>}
+                style={{height:140}}>
+                <div style={{height:84}}><Chart data={[
+                  {x:hist.current.t,y:hist.current.ax,name:'Ax',mode:'lines',line:{color:'#3b82f6',width:1.5}},
+                  {x:hist.current.t,y:hist.current.ay,name:'Ay',mode:'lines',line:{color:'#8b5cf6',width:1.5}},
+                  {x:hist.current.t,y:hist.current.az,name:'Az',mode:'lines',line:{color:'#10b981',width:1.5}},
+                ]} extra={{yaxis:{title:'g'}}}/></div>
+              </Panel>
+              <Panel title="Altitude Profile" accent="#10b981" style={{height:140}}>
+                <div style={{height:84}}><Chart data={orkData?[{x:orkData.t,y:orkData.altitude,fill:'tozeroy',mode:'lines',line:{color:'#10b981',width:2},fillcolor:'rgba(16,185,129,0.07)',name:'ORK Alt'}]:simData?[{x:simData.t,y:simData.altitude,fill:'tozeroy',mode:'lines',line:{color:'#10b981',width:2},fillcolor:'rgba(16,185,129,0.07)'}]:[{x:hist.current.t,y:hist.current.alt,fill:'tozeroy',mode:'lines',line:{color:'#10b981',width:1.5},fillcolor:'rgba(16,185,129,0.07)'}]}/></div>
+              </Panel>
+              <Panel title="Velocity Profile" accent="#f59e0b" style={{height:140}}>
+                <div style={{height:84}}><Chart data={orkData?[
+                  {x:orkData.t,y:orkData.v_vert,name:'Vz',mode:'lines',line:{color:'#f59e0b',width:1.5}},
+                  {x:orkData.t,y:orkData.v_total,name:'|V|',mode:'lines',line:{color:'#e8121c',width:1.5}}
+                ]:[{x:hist.current.t,y:hist.current.pressure,fill:'tozeroy',mode:'lines',line:{color:'#f59e0b',width:1.5},fillcolor:'rgba(245,158,11,0.06)'}]} extra={{yaxis:{title:'m/s'}}}/></div>
+              </Panel>
+            </div>
           </>
         )}
 
@@ -1935,6 +1970,169 @@ export default function App() {
               <Panel title="Overshoot Comparison" style={{height:230}}>
                 <div style={{height:175}}><Chart data={[{type:'bar',x:['PID','LQI','MRAC','ADRC'],y:[5.0,7.8,30.4,0.0],marker:{color:['#3b82f6','#10b981','#e8121c','#10b981']}}]} extra={{yaxis:{title:'Overshoot (%)'},showlegend:false}}/></div>
               </Panel>
+            </div>
+          </div>
+        )}
+
+        {/* ══════════ OPENROCKET ══════════════════════════════════════════════════ */}
+        {tab==='openrocket'&&(
+          <div style={{display:'flex',flexDirection:'column',gap:10}}>
+            {/* Hero Bar */}
+            <div style={{background:'linear-gradient(135deg,#0d1624 0%,#111827 100%)',border:'1px solid rgba(232,18,28,0.25)',borderRadius:8,padding:'14px 18px'}}>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}}>
+                <div style={{display:'flex',alignItems:'center',gap:10}}>
+                  <div style={{width:32,height:32,borderRadius:6,background:'rgba(232,18,28,0.15)',border:'1px solid rgba(232,18,28,0.4)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:16}}>🚀</div>
+                  <div>
+                    <div style={{fontFamily:'Orbitron,sans-serif',fontSize:13,fontWeight:700,color:'#f0f4f8',letterSpacing:'0.08em'}}>PROJECT NEAL 1.2</div>
+                    <div style={{fontFamily:'JetBrains Mono',fontSize:7,color:'#475569',letterSpacing:'0.12em'}}>OPENROCKET 24.12 — SIM: BRAHMAPUTRA — 220 DATA POINTS</div>
+                  </div>
+                </div>
+                <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                  <span style={{fontFamily:'JetBrains Mono',fontSize:7,color:'#64748b'}}>LOAD .ORK:</span>
+                  <label style={{cursor:'pointer',padding:'4px 10px',background:'rgba(59,130,246,0.1)',border:'1px solid rgba(59,130,246,0.3)',borderRadius:4,fontFamily:'JetBrains Mono',fontSize:7,color:'#3b82f6',fontWeight:700}}>
+                    📂 BROWSE
+                    <input type="file" accept=".ork" style={{display:'none'}} onChange={async e=>{
+                      const file=e.target.files[0]; if(!file) return;
+                      setOrkFileName(file.name);
+                      try {
+                        const ab=await file.arrayBuffer();
+                        const {default:JSZip}=await import('jszip');
+                        const zip=await JSZip.loadAsync(ab);
+                        const xml=await zip.file('rocket.ork').async('string');
+                        const doc=new DOMParser().parseFromString(xml,'application/xml');
+                        const br=doc.querySelector('databranch'); if(!br) return;
+                        const types=(br.getAttribute('types')||'').split(',');
+                        const I={T:types.indexOf('Time'),ALT:types.indexOf('Altitude'),VZ:types.indexOf('Vertical velocity'),VT:types.indexOf('Total velocity'),AZ:types.indexOf('Vertical acceleration'),PE:types.indexOf('Position East of launch'),PN:types.indexOf('Position North of launch')};
+                        const sf=v=>{const n=parseFloat(v);return isNaN(n)?0:n;};
+                        const td={t:[],altitude:[],v_vert:[],v_total:[],a_vert:[],pos_east:[],pos_north:[],lat_dist:[]};
+                        Array.from(br.querySelectorAll('datapoint')).forEach(pt=>{
+                          const c=pt.textContent.split(',');
+                          td.t.push(sf(c[I.T]));td.altitude.push(sf(c[I.ALT]));td.v_vert.push(sf(c[I.VZ]));td.v_total.push(sf(c[I.VT]));td.a_vert.push(sf(c[I.AZ]));td.pos_east.push(sf(c[I.PE]));td.pos_north.push(sf(c[I.PN]));td.lat_dist.push(Math.hypot(sf(c[I.PE]),sf(c[I.PN])));
+                        });
+                        setOrkData(td); setTime(0);
+                      } catch(err){console.error('ORK parse err',err);}
+                    }}/>
+                  </label>
+                  <span style={{fontFamily:'JetBrains Mono',fontSize:7,color:'#475569'}}>{orkFileName}</span>
+                </div>
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(8,1fr)',gap:6}}>
+                {[
+                  {l:'MAX ALTITUDE',v:orkData?Math.max(...orkData.altitude).toFixed(2):'59.50',u:'m',c:'#10b981'},
+                  {l:'MAX VELOCITY',v:orkData?Math.max(...orkData.v_total).toFixed(2):'31.55',u:'m/s',c:'#3b82f6'},
+                  {l:'MAX ACCEL',   v:orkData?Math.max(...orkData.a_vert).toFixed(2):'35.42',u:'m/s²',c:'#e8121c'},
+                  {l:'APOGEE TIME', v:'4.08',u:'s',c:'#f59e0b'},
+                  {l:'FLIGHT TIME', v:orkData?orkData.t[orkData.t.length-1].toFixed(2):'8.39',u:'s',c:'#8b5cf6'},
+                  {l:'LAND SPEED',  v:'7.90',u:'m/s',c:'#64748b'},
+                  {l:'LAUNCH ROD V',v:'8.155',u:'m/s',c:'#06b6d4'},
+                  {l:'OPT DELAY',   v:'2.935',u:'s',c:'#94a3b8'},
+                ].map(k=>(
+                  <div key={k.l} style={{background:'rgba(255,255,255,0.02)',border:`1px solid ${k.c}25`,borderRadius:6,padding:'8px 10px',textAlign:'center'}}>
+                    <div style={{fontFamily:'JetBrains Mono',fontSize:5.5,color:'#475569',letterSpacing:'0.08em',textTransform:'uppercase',marginBottom:3}}>{k.l}</div>
+                    <div style={{fontFamily:'Orbitron,sans-serif',fontSize:13,fontWeight:700,color:k.c}}>{k.v}</div>
+                    <div style={{fontFamily:'JetBrains Mono',fontSize:6,color:'#64748b',marginTop:2}}>{k.u}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Two columns: charts + components */}
+            <div style={{display:'grid',gridTemplateColumns:'1fr 330px',gap:10}}>
+              <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                <Panel title="Altitude vs Time" accent="#10b981" titleRight={<Badge color="#10b981">{orkData?Math.max(...orkData.altitude).toFixed(1):'59.5'} m APOGEE</Badge>}>
+                  <div style={{height:130}}><Chart data={orkData?[{x:orkData.t,y:orkData.altitude,name:'Alt',mode:'lines',fill:'tozeroy',line:{color:'#10b981',width:2},fillcolor:'rgba(16,185,129,0.08)'}]:[]} extra={{xaxis:{title:'Time (s)'},yaxis:{title:'m'}}}/></div>
+                </Panel>
+                <Panel title="Velocity vs Time" accent="#3b82f6" titleRight={<Badge color="#3b82f6">{orkData?Math.max(...orkData.v_total).toFixed(1):'31.6'} m/s PEAK</Badge>}>
+                  <div style={{height:130}}><Chart data={orkData?[
+                    {x:orkData.t,y:orkData.v_total,name:'|V|',mode:'lines',line:{color:'#3b82f6',width:2}},
+                    {x:orkData.t,y:orkData.v_vert, name:'Vz', mode:'lines',line:{color:'#8b5cf6',width:1.5,dash:'dot'}},
+                  ]:[]} extra={{xaxis:{title:'Time (s)'},yaxis:{title:'m/s'}}}/></div>
+                </Panel>
+                <Panel title="Vertical Acceleration vs Time" accent="#e8121c" titleRight={<Badge color="#e8121c">{orkData?Math.max(...orkData.a_vert).toFixed(1):'35.4'} m/s²</Badge>}>
+                  <div style={{height:130}}><Chart data={orkData?[
+                    {x:orkData.t,y:orkData.a_vert,name:'Az',mode:'lines',line:{color:'#e8121c',width:2}},
+                    {x:orkData.t,y:orkData.t.map(()=>-9.81),name:'-g',mode:'lines',line:{color:'#475569',width:1,dash:'dot'}},
+                  ]:[]} extra={{xaxis:{title:'Time (s)'},yaxis:{title:'m/s²'}}}/></div>
+                </Panel>
+                <Panel title="Downrange Position — East / North" accent="#f59e0b">
+                  <div style={{height:130}}><Chart data={orkData?[
+                    {x:orkData.t,y:orkData.pos_east,name:'East',mode:'lines',line:{color:'#f59e0b',width:2}},
+                    {x:orkData.t,y:orkData.pos_north,name:'North',mode:'lines',line:{color:'#06b6d4',width:1.5}},
+                    {x:orkData.t,y:orkData.lat_dist,name:'Lat Dist',mode:'lines',line:{color:'#8b5cf6',width:1,dash:'dot'}},
+                  ]:[]} extra={{xaxis:{title:'Time (s)'},yaxis:{title:'m'}}}/></div>
+                </Panel>
+              </div>
+
+              <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                <Panel title="Rocket Components" accent="#8b5cf6" titleRight={<Badge color="#8b5cf6">8 PARTS</Badge>}>
+                  <div style={{display:'flex',flexDirection:'column',gap:5}}>
+                    {[
+                      {icon:'🔺',name:'Nose Cone',    mat:'PLA 100% infill', dim:'279.4 mm',    note:'2mm wall',          c:'#e8121c'},
+                      {icon:'⬡', name:'Body Tube',    mat:'PVC',             dim:'863.6 mm',    note:'Ø54mm, 0.89mm wall',c:'#3b82f6'},
+                      {icon:'⚙', name:'Motor Mount',  mat:'PVC',             dim:'113.2 mm',    note:'Inner tube',        c:'#64748b'},
+                      {icon:'▲', name:'Fins (Trap.)', mat:'PLA 100% infill', dim:'4 × fins',    note:'Root 127 / Tip 51mm',c:'#f59e0b'},
+                      {icon:'◆', name:'Fins (TVC)',   mat:'PLA 100% infill', dim:'4 × fins',    note:'Freeform, 3mm',     c:'#e8121c'},
+                      {icon:'⬤', name:'Parachute',    mat:'Ripstop nylon',   dim:'Ø 935 mm',    note:'Recovery chute',    c:'#10b981'},
+                      {icon:'📦',name:'Avionics Bay', mat:'Mass component',  dim:'600 g',       note:'Flight computer+IMU',c:'#8b5cf6'},
+                      {icon:'🔩',name:'Ballast',       mat:'Mass component',  dim:'195 g',       note:'Nose cone ballast', c:'#94a3b8'},
+                    ].map(comp=>(
+                      <div key={comp.name} style={{background:'rgba(255,255,255,0.02)',border:`1px solid ${comp.c}22`,borderRadius:5,padding:'6px 8px',display:'flex',alignItems:'flex-start',gap:7}}>
+                        <span style={{fontSize:13,width:18,textAlign:'center',flexShrink:0,marginTop:1}}>{comp.icon}</span>
+                        <div style={{flex:1}}>
+                          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                            <span style={{fontFamily:'JetBrains Mono',fontSize:7.5,fontWeight:700,color:'#f0f4f8'}}>{comp.name}</span>
+                            <span style={{fontFamily:'JetBrains Mono',fontSize:7,color:comp.c}}>{comp.dim}</span>
+                          </div>
+                          <div style={{display:'flex',justifyContent:'space-between',marginTop:1}}>
+                            <span style={{fontFamily:'JetBrains Mono',fontSize:6,color:'#64748b'}}>{comp.mat}</span>
+                            <span style={{fontFamily:'JetBrains Mono',fontSize:6,color:'#475569'}}>{comp.note}</span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </Panel>
+
+                <Panel title="Launch Conditions" accent="#06b6d4">
+                  <div style={{display:'flex',flexDirection:'column',gap:3}}>
+                    {[
+                      ['SIMULATOR','RK4 Variable-step'],
+                      ['LAUNCH SITE','28.610°N 80.600°W'],
+                      ['LAUNCH ROD','1.0 m — 15° off-vertical'],
+                      ['WIND SPEED','1.54 m/s avg, 10% turb.'],
+                      ['WIND DIR','90° (East-facing)'],
+                      ['ATMOSPHERE','ISA Standard'],
+                      ['TIME STEP','50 ms'],
+                      ['GEODETIC MODEL','Spherical Earth'],
+                    ].map(([l,v])=>(
+                      <div key={l} style={{display:'flex',justifyContent:'space-between',padding:'3px 0',borderBottom:'1px solid rgba(255,255,255,0.03)'}}>
+                        <span style={{fontFamily:'JetBrains Mono',fontSize:6,color:'#475569',textTransform:'uppercase',letterSpacing:'0.06em'}}>{l}</span>
+                        <span style={{fontFamily:'JetBrains Mono',fontSize:7,color:'#94a3b8',fontWeight:600}}>{v}</span>
+                      </div>
+                    ))}
+                  </div>
+                </Panel>
+
+                <Panel title="Mass Budget" accent="#f59e0b" titleRight={<Badge color="#f59e0b">2.055 kg WET</Badge>}>
+                  {[
+                    {l:'Wet Mass',      v:2.055, tot:2.055, c:'#f59e0b'},
+                    {l:'Dry Mass',      v:1.968, tot:2.055, c:'#10b981'},
+                    {l:'Propellant',    v:0.087, tot:2.055, c:'#e8121c'},
+                    {l:'Avionics',      v:0.600, tot:2.055, c:'#8b5cf6'},
+                    {l:'Ballast',       v:0.195, tot:2.055, c:'#94a3b8'},
+                  ].map(m=>(
+                    <div key={m.l} style={{marginBottom:5}}>
+                      <div style={{display:'flex',justifyContent:'space-between',marginBottom:2}}>
+                        <span style={{fontFamily:'JetBrains Mono',fontSize:6.5,color:'#64748b'}}>{m.l}</span>
+                        <span style={{fontFamily:'JetBrains Mono',fontSize:7,fontWeight:700,color:m.c}}>{m.v.toFixed(3)} kg</span>
+                      </div>
+                      <div style={{height:3,background:'rgba(255,255,255,0.04)',borderRadius:2}}>
+                        <div style={{width:`${(m.v/m.tot)*100}%`,height:3,background:m.c,borderRadius:2,boxShadow:`0 0 4px ${m.c}66`}}/>
+                      </div>
+                    </div>
+                  ))}
+                </Panel>
+              </div>
             </div>
           </div>
         )}
