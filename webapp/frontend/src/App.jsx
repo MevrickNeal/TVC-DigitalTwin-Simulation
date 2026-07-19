@@ -103,19 +103,21 @@ function RocketModel({ pitch = 0, roll = 0, yaw = 0, deltaPitch = 0, deltaYaw = 
   const S = model.userData.SCALE;
   return (
     <group rotation={[pitch, yaw, roll]}>
-      <group scale={[S,S,S]} rotation={[-Math.PI/2,0,0]}><primitive object={model}/></group>
-      <group position={[0,NY,0]} rotation={[deltaPitch, 0, deltaYaw]}>
-        <mesh><torusGeometry args={[BR*0.88,0.025,16,48]}/><meshStandardMaterial color="#3a3a4a" metalness={0.95} roughness={0.1}/></mesh>
-        <mesh position={[0,-0.3,0]}><cylinderGeometry args={[BR*0.54,BR*0.88,0.58,40]}/><meshStandardMaterial color="#0d0d14" metalness={0.95} roughness={0.1}/></mesh>
-        <mesh position={[0,-0.05,0]}><cylinderGeometry args={[BR*0.5,BR*0.5,0.06,32]}/><meshStandardMaterial color="#7f1d1d" emissive="#e8121c" emissiveIntensity={isFiring?4:0.4} roughness={1} metalness={0}/></mesh>
-        {isFiring && (
-          <group ref={flameRef} position={[0,-0.6,0]}>
-            <mesh position={[0,-0.35,0]}><coneGeometry args={[BR*0.5,0.75,32]}/><meshBasicMaterial color="#ffffff" transparent opacity={0.97}/></mesh>
-            <mesh position={[0,-0.65,0]}><coneGeometry args={[BR*0.78,1.3,32]}/><meshBasicMaterial color="#ff9500" transparent opacity={0.80}/></mesh>
-            <mesh position={[0,-0.95,0]}><coneGeometry args={[BR*1.1,1.7,32]}/><meshBasicMaterial color="#e8121c" transparent opacity={0.40}/></mesh>
-            <mesh position={[0,-1.25,0]}><coneGeometry args={[BR*1.4,1.5,32]}/><meshBasicMaterial color="#b80f18" transparent opacity={0.12}/></mesh>
-          </group>
-        )}
+      <group position={[0, -NY, 0]}>
+        <group scale={[S,S,S]} rotation={[-Math.PI/2,0,0]}><primitive object={model}/></group>
+        <group position={[0,NY,0]} rotation={[deltaPitch, 0, deltaYaw]}>
+          <mesh><torusGeometry args={[BR*0.88,0.025,16,48]}/><meshStandardMaterial color="#3a3a4a" metalness={0.95} roughness={0.1}/></mesh>
+          <mesh position={[0,-0.3,0]}><cylinderGeometry args={[BR*0.54,BR*0.88,0.58,40]}/><meshStandardMaterial color="#0d0d14" metalness={0.95} roughness={0.1}/></mesh>
+          <mesh position={[0,-0.05,0]}><cylinderGeometry args={[BR*0.5,BR*0.5,0.06,32]}/><meshStandardMaterial color="#7f1d1d" emissive="#e8121c" emissiveIntensity={isFiring?4:0.4} roughness={1} metalness={0}/></mesh>
+          {isFiring && (
+            <group ref={flameRef} position={[0,-0.6,0]}>
+              <mesh position={[0,-0.35,0]}><coneGeometry args={[BR*0.5,0.75,32]}/><meshBasicMaterial color="#ffffff" transparent opacity={0.97}/></mesh>
+              <mesh position={[0,-0.65,0]}><coneGeometry args={[BR*0.78,1.3,32]}/><meshBasicMaterial color="#ff9500" transparent opacity={0.80}/></mesh>
+              <mesh position={[0,-0.95,0]}><coneGeometry args={[BR*1.1,1.7,32]}/><meshBasicMaterial color="#e8121c" transparent opacity={0.40}/></mesh>
+              <mesh position={[0,-1.25,0]}><coneGeometry args={[BR*1.4,1.5,32]}/><meshBasicMaterial color="#b80f18" transparent opacity={0.12}/></mesh>
+            </group>
+          )}
+        </group>
       </group>
     </group>
   );
@@ -1087,7 +1089,7 @@ export default function App() {
   // east/north: 72m max → 7.2 units (matching footprint)
   const ORK_ALT_S  = 0.12;  // altitude scale
   const ORK_POS_S  = 0.10;  // east/north scale
-  const ROCKET_BASE = 0.5;  // Y offset so rocket sits ON launchpad
+  const ROCKET_BASE = 0.0;  // Rocket bottom nozzle is at local Y=0, sits directly on launchpad
 
   // Generate Trajectory Points
   const trajectoryPoints = useMemo(() => {
@@ -1135,7 +1137,7 @@ export default function App() {
       const px = hist.current.x[maxIdx] ?? 0;
       const py = hist.current.y[maxIdx] ?? 0;
       return {
-        pos: [px * 0.10, 0.5 + maxAlt * 0.12, py * 0.10],
+        pos: [px * ORK_POS_S, ROCKET_BASE + maxAlt * ORK_ALT_S, py * ORK_POS_S],
         alt: maxAlt,
         time: hist.current.t[maxIdx] ?? 0
       };
@@ -1143,7 +1145,7 @@ export default function App() {
       let maxAlt = 0; let maxIdx = 0;
       orkData.altitude.forEach((a, i) => { if (a > maxAlt) { maxAlt = a; maxIdx = i; } });
       return {
-        pos: [orkData.pos_east[maxIdx] * 0.10, 0.5 + maxAlt * 0.12, orkData.pos_north[maxIdx] * 0.10],
+        pos: [orkData.pos_east[maxIdx] * ORK_POS_S, ROCKET_BASE + maxAlt * ORK_ALT_S, orkData.pos_north[maxIdx] * ORK_POS_S],
         alt: maxAlt,
         time: orkData.t[maxIdx]
       };
@@ -1152,7 +1154,7 @@ export default function App() {
       let maxAlt = 0; let maxIdx = 0;
       simData.altitude.forEach((a, i) => { if (a > maxAlt) { maxAlt = a; maxIdx = i; } });
       return {
-        pos: [simData.drift_x[maxIdx] * 0.10, 0.5 + maxAlt * 0.12, simData.drift_y ? simData.drift_y[maxIdx] * 0.10 : 0],
+        pos: [simData.drift_x[maxIdx] * ORK_POS_S, ROCKET_BASE + maxAlt * ORK_ALT_S, simData.drift_y ? simData.drift_y[maxIdx] * ORK_POS_S : 0],
         alt: maxAlt,
         time: simData.t[maxIdx]
       };
@@ -1450,10 +1452,10 @@ export default function App() {
                       </div>
                     </Html>
 
-                    {/* Altitude Ticks */}
-                    {[2, 4, 6, 8, 10].map(y => (
+                    {/* Altitude Ticks (matching ORK_ALT_S 0.12) */}
+                    {[1.2, 2.4, 3.6, 4.8, 6.0, 7.2].map(y => (
                       <Html key={y} position={[-0.4, y, 0]} center>
-                        <div style={{ fontFamily: 'JetBrains Mono', fontSize: 5.5, color: '#64748b' }}>{y * 100}m</div>
+                        <div style={{ fontFamily: 'JetBrains Mono', fontSize: 5.5, color: '#64748b' }}>{Math.round(y / ORK_ALT_S)}m</div>
                       </Html>
                     ))}
 
