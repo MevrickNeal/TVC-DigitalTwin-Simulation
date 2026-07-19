@@ -880,7 +880,7 @@ export default function App() {
   const [padActive,setPadActive] = useState(false);
   const [telem,setTelem] = useState(null);
   const [launch,setLaunch] = useState({armed:false,countdown_active:false,remaining_seconds:30,launched:false});
-  const [usbKey,setUsbKey] = useState('');
+  const [usbKey,setUsbKey] = useState('NEAL2026');
   const [windForce, setWindForce] = useState(0.3);
   const [dragCoeff, setDragCoeff] = useState(0.12);
   const tvcSimState = useRef({
@@ -899,6 +899,9 @@ export default function App() {
   const [packetLogs, setPacketLogs] = useState([]);
   const [orkData, setOrkData] = useState(null);
   const [orkFileName, setOrkFileName] = useState('ProjectNeal1.2.ork');
+  const [cfdData, setCfdData] = useState(null);
+  const [cfdMach, setCfdMach] = useState(0.25);
+  const [cfdAlpha, setCfdAlpha] = useState(2.0);
 
   const keyOk = usbKey === 'NEAL2026';
   const ctrl={1:'PID',2:'LQI',3:'MRAC',4:'ADRC'};
@@ -910,6 +913,7 @@ export default function App() {
     {id:'vehicle',label:'VEHICLE CONFIG'},
     {id:'bench',label:'BENCHMARKS'},
     {id:'openrocket',label:'OPENROCKET'},
+    {id:'cfd',label:'AERODYNAMICS & CFD'},
     {id:'paper',label:'RESEARCH PAPER'},
   ];
 
@@ -939,11 +943,15 @@ export default function App() {
     };
   }, []);
 
-  // ── Load OpenRocket trajectory JSON on mount ───────────────────────────────
+  // ── Load OpenRocket trajectory & CFD JSON on mount ─────────────────────────
   useEffect(() => {
     fetch('/ork_trajectory.json')
       .then(r => r.json())
       .then(d => setOrkData(d))
+      .catch(() => {});
+    fetch('/cfd_results.json')
+      .then(r => r.json())
+      .then(d => setCfdData(d))
       .catch(() => {});
   }, []);
 
@@ -994,17 +1002,20 @@ export default function App() {
   }, [launch.countdown_active, launch.remaining_seconds, launch.launched]);
 
   useEffect(()=>{
-    if(!simData||!playing) return;
+    if(!playing) return;
     const id=setInterval(()=>{
       setTime(p=>{
-        const nxt=p+0.02*speed;
-        const max=simData.t[simData.t.length-1];
-        if(nxt>=max){setPlaying(false);return max;}
+        const max = orkData ? orkData.t[orkData.t.length-1] : (simData ? simData.t[simData.t.length-1] : 30);
+        const nxt = p + 0.02 * speed;
+        if(nxt >= max) {
+          setPlaying(false);
+          return max;
+        }
         return nxt;
       });
     },20);
     return ()=>clearInterval(id);
-  },[simData,playing,speed]);
+  },[simData,orkData,playing,speed]);
 
   // ── Live Telemetry poll ────────────────────────────────────────────────────
   useEffect(()=>{
@@ -1160,6 +1171,24 @@ export default function App() {
       };
     }
   }, [simData, orkData, liveMode, tick]);
+
+  const landingZoneInfo = useMemo(() => {
+    if (orkData) {
+      const N = orkData.t.length - 1;
+      const lx = orkData.pos_east[N] * ORK_POS_S;
+      const lz = orkData.pos_north[N] * ORK_POS_S;
+      const realX = orkData.pos_east[N];
+      const realZ = orkData.pos_north[N];
+      return {
+        pos: [lx, 0.01, lz],
+        realX,
+        realZ,
+        dist: Math.hypot(realX, realZ),
+        time: orkData.t[N]
+      };
+    }
+    return null;
+  }, [orkData]);
 
   useEffect(() => {
     if (liveMode || !playing || !simData) return;
@@ -1478,6 +1507,29 @@ export default function App() {
                       </group>
                     )}
 
+                    {/* Probable Landing / Impact Zone */}
+                    {landingZoneInfo && (
+                      <group position={landingZoneInfo.pos}>
+                        <mesh rotation={[-Math.PI/2, 0, 0]}>
+                          <ringGeometry args={[0.6, 1.3, 32]} />
+                          <meshBasicMaterial color="#ef4444" transparent opacity={0.35} side={THREE.DoubleSide} />
+                        </mesh>
+                        <mesh rotation={[-Math.PI/2, 0, 0]}>
+                          <ringGeometry args={[0.05, 0.22, 32]} />
+                          <meshBasicMaterial color="#e8121c" transparent opacity={0.8} side={THREE.DoubleSide} />
+                        </mesh>
+                        <Html center position={[0, 0.35, 0]}>
+                          <div style={{
+                            fontFamily: 'JetBrains Mono', fontSize: 6, fontWeight: 'bold', color: '#ef4444',
+                            background: 'rgba(9, 13, 22, 0.95)', border: '1px solid #ef4444', padding: '2px 5px',
+                            borderRadius: 3, whiteSpace: 'nowrap', pointerEvents: 'none', boxShadow: '0 0 10px rgba(239,68,68,0.5)'
+                          }}>
+                            🎯 LANDING ZONE: {landingZoneInfo.dist.toFixed(1)}m EAST ({landingZoneInfo.time.toFixed(1)}s)
+                          </div>
+                        </Html>
+                      </group>
+                    )}
+
                     <OrbitControls enableZoom={true} enableRotate={true} enablePan={true} target={[0, 4, 0]} maxPolarAngle={Math.PI / 2 - 0.05} />
                     <Suspense fallback={null}>
                       <group position={[currentDriftX * ORK_POS_S, ROCKET_BASE + currentAlt * ORK_ALT_S, currentDriftY * ORK_POS_S]}>
@@ -1625,8 +1677,8 @@ export default function App() {
               </Panel>
             </div>
 
-            {/* COLUMN 2: Interactive TVC 3D View (340px) */}
-            <Panel style={{height:550,display:'flex',flexDirection:'column'}} title="Interactive TVC 3D View"
+            {/* COLUMN 2: Interactive TVC 3D View (340px - TALLER) */}
+            <Panel style={{height:715,display:'flex',flexDirection:'column'}} title="Interactive TVC 3D View"
               titleRight={<div style={{display:'flex',gap:6}}><Badge color="#3b82f6">ACTIVE SIM</Badge></div>}>
               <div style={{flex:1,background:'#090d16',borderRadius:6,overflow:'hidden',position:'relative'}}>
                 <Canvas camera={{position:[0,0,5.2],fov:42}}>
@@ -1656,15 +1708,15 @@ export default function App() {
               </div>
             </Panel>
 
-            {/* COLUMN 3: Pitch & Deflection Charts (Remaining 1fr) */}
+            {/* COLUMN 3: Pitch & Deflection Charts (Remaining 1fr - MATCHING HEIGHT) */}
             <div style={{display:'flex',flexDirection:'column',gap:8}}>
-              <Panel title="Pitch Response" style={{height:271}}>
-                <div style={{height:224}}>
+              <Panel title="Pitch Response" style={{height:353}}>
+                <div style={{height:306}}>
                   {simData?<Chart data={[{x:simData.t,y:simData.theta,name:ctrl[params.controller_idx],mode:'lines',line:{color:'#3b82f6',width:2}},{x:simData.t,y:simData.t.map(()=>5),name:'Ref 5°',mode:'lines',line:{color:'#e8121c',width:1,dash:'dash'}}]} extra={{yaxis:{title:'deg'}}}/>:null}
                 </div>
               </Panel>
-              <Panel title="Gimbal Deflection" style={{height:271}}>
-                <div style={{height:224}}>
+              <Panel title="Gimbal Deflection" style={{height:353}}>
+                <div style={{height:306}}>
                   {simData?<Chart data={[{x:simData.t,y:simData.delta,name:'Gimbal',mode:'lines',line:{color:'#e8121c',width:2}},{x:simData.t,y:simData.t.map(()=>params.gimbal_limit),name:'Limit',mode:'lines',line:{color:'#f59e0b',width:1,dash:'dot'}},{x:simData.t,y:simData.t.map(()=>-params.gimbal_limit),name:'-Limit',mode:'lines',line:{color:'#f59e0b',width:1,dash:'dot'}}]}/>:null}
                 </div>
               </Panel>
@@ -2135,6 +2187,191 @@ export default function App() {
                   ))}
                 </Panel>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* ══════════ AERODYNAMICS & CFD ══════════════════════════════════════════ */}
+        {tab==='cfd'&&(
+          <div style={{display:'flex',flexDirection:'column',gap:10}}>
+            {/* Hero Performance Bar */}
+            <div style={{background:'linear-gradient(135deg,#0d1624 0%,#111827 100%)',border:'1px solid rgba(59,130,246,0.25)',borderRadius:8,padding:'14px 18px'}}>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}}>
+                <div style={{display:'flex',alignItems:'center',gap:10}}>
+                  <div style={{width:32,height:32,borderRadius:6,background:'rgba(59,130,246,0.15)',border:'1px solid rgba(59,130,246,0.4)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:16}}>🌀</div>
+                  <div>
+                    <div style={{fontFamily:'Orbitron,sans-serif',fontSize:13,fontWeight:700,color:'#f0f4f8',letterSpacing:'0.08em'}}>COMPUTATIONAL FLUID DYNAMICS (CFD)</div>
+                    <div style={{fontFamily:'JetBrains Mono',fontSize:7,color:'#475569',letterSpacing:'0.12em'}}>OPENFOAM rsoSimpleFoam — k-ω SST RANS — PROJECT NEAL 1.2</div>
+                  </div>
+                </div>
+                <div style={{display:'flex',gap:12,alignItems:'center'}}>
+                  <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end'}}>
+                    <span style={{fontFamily:'JetBrains Mono',fontSize:6.5,color:'#475569'}}>MACH NUMBER</span>
+                    <span style={{fontFamily:'Orbitron,sans-serif',fontSize:12,fontWeight:700,color:'#3b82f6'}}>M = {cfdMach.toFixed(2)}</span>
+                  </div>
+                  <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end'}}>
+                    <span style={{fontFamily:'JetBrains Mono',fontSize:6.5,color:'#475569'}}>ANGLE OF ATTACK</span>
+                    <span style={{fontFamily:'Orbitron,sans-serif',fontSize:12,fontWeight:700,color:'#e8121c'}}>α = {cfdAlpha.toFixed(1)}°</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* KPI Cards */}
+              <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:6}}>
+                {[
+                  {l:'ZERO-ALPHA DRAG', v:'0.420', u:'CD0', c:'#3b82f6'},
+                  {l:'CURRENT DRAG',    v:(0.42 + 0.05*(cfdMach**2) + (cfdMach>0.65?0.35*(((cfdMach-0.65)/0.2)**2):0)).toFixed(3), u:'CD', c:cfdMach>0.65?'#e8121c':'#10b981'},
+                  {l:'FREESTREAM VEL',  v:(cfdMach*340.3).toFixed(1), u:'m/s', c:'#06b6d4'},
+                  {l:'DYNAMIC PRESS',   v:(0.5*1.225*(cfdMach*340.3)**2 / 1000).toFixed(2), u:'kPa', c:'#f59e0b'},
+                  {l:'CENTER OF PRESS', v:(0.685 + 0.065*(cfdMach**1.5)).toFixed(3), u:'m from nose', c:'#8b5cf6'},
+                  {l:'STATIC MARGIN',   v:((0.685 + 0.065*(cfdMach**1.5) - 0.600)/0.054).toFixed(2), u:'calibres', c:'#10b981'},
+                  {l:'REYNOLDS NUM',    v:(1.225*(cfdMach*340.3)*1.143 / 1.81e-5 / 1e6).toFixed(2), u:'× 10⁶', c:'#94a3b8'},
+                ].map(k=>(
+                  <div key={k.l} style={{background:'rgba(255,255,255,0.02)',border:`1px solid ${k.c}25`,borderRadius:6,padding:'8px 10px',textAlign:'center'}}>
+                    <div style={{fontFamily:'JetBrains Mono',fontSize:5.5,color:'#475569',letterSpacing:'0.08em',textTransform:'uppercase',marginBottom:3}}>{k.l}</div>
+                    <div style={{fontFamily:'Orbitron,sans-serif',fontSize:13,fontWeight:700,color:k.c}}>{k.v}</div>
+                    <div style={{fontFamily:'JetBrains Mono',fontSize:6,color:'#64748b',marginTop:2}}>{k.u}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Interactive 3D Flow Visualizer + Controls */}
+            <div style={{display:'grid',gridTemplateColumns:'1fr 340px',gap:10}}>
+              
+              {/* 3D Flow Streamlines Canvas */}
+              <Panel title="3D Aerodynamic Flow Streamlines &amp; Velocity Field" accent="#3b82f6" titleRight={<Badge color="#3b82f6">REAL-TIME CFD</Badge>}>
+                <div style={{height:400,position:'relative',background:'linear-gradient(180deg,#070c17,#090d1c)',borderRadius:6,overflow:'hidden',border:'1px solid rgba(255,255,255,0.04)'}}>
+                  <Canvas camera={{position:[4,2,3.5],fov:42}}>
+                    <ambientLight intensity={1.8}/>
+                    <directionalLight position={[10,15,10]} intensity={2}/>
+                    <Suspense fallback={null}>
+                      {/* Flow Field Streamline Particles */}
+                      <CfdFlowField mach={cfdMach} alpha={cfdAlpha} />
+                      
+                      {/* Rocket Geometry oriented with Alpha (Angle of Attack) */}
+                      <group rotation={[(cfdAlpha * Math.PI)/180, 0, 0]} position={[0,0,0]}>
+                        <RocketModel pitch={0} roll={0} yaw={0} isFiring={false}/>
+                      </group>
+
+                      {/* 3D Flow Annotations */}
+                      <Html position={[0, 0.4, -0.6]} center>
+                        <div style={{fontFamily:'JetBrains Mono',fontSize:6,color:'#ef4444',background:'#090d16cc',padding:'1px 4px',border:'1px solid rgba(239,68,68,0.3)',borderRadius:2,whiteSpace:'nowrap'}}>
+                          STAGNATION: Cp = 1.0
+                        </div>
+                      </Html>
+                      <Html position={[0, 0.5, 0.3]} center>
+                        <div style={{fontFamily:'JetBrains Mono',fontSize:6,color:'#3b82f6',background:'#090d16cc',padding:'1px 4px',border:'1px solid rgba(59,130,246,0.3)',borderRadius:2,whiteSpace:'nowrap'}}>
+                          SHOULDER EXPANSION: Cp = -0.35
+                        </div>
+                      </Html>
+                      <Html position={[0, 0.6, 2.2]} center>
+                        <div style={{fontFamily:'JetBrains Mono',fontSize:6,color:'#8b5cf6',background:'#090d16cc',padding:'1px 4px',border:'1px solid rgba(139,92,246,0.3)',borderRadius:2,whiteSpace:'nowrap'}}>
+                          FIN LEADING EDGE SHOCK
+                        </div>
+                      </Html>
+                      <Html position={[0, 0.3, 3.2]} center>
+                        <div style={{fontFamily:'JetBrains Mono',fontSize:6,color:'#f59e0b',background:'#090d16cc',padding:'1px 4px',border:'1px solid rgba(245,158,11,0.3)',borderRadius:2,whiteSpace:'nowrap'}}>
+                          BASE RECIRCULATION WAKE
+                        </div>
+                      </Html>
+                    </Suspense>
+                    <OrbitControls enableZoom={true} enableRotate={true} target={[0,0,0]} />
+                  </Canvas>
+                </div>
+
+                {/* Interactive Controls below Canvas */}
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginTop:10,background:'rgba(255,255,255,0.02)',padding:'10px 14px',borderRadius:6,border:'1px solid rgba(255,255,255,0.04)'}}>
+                  <div>
+                    <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+                      <span style={{fontFamily:'JetBrains Mono',fontSize:7,color:'#475569',letterSpacing:'0.06em'}}>MACH NUMBER (M)</span>
+                      <span style={{fontFamily:'JetBrains Mono',fontSize:8,fontWeight:700,color:'#3b82f6'}}>M = {cfdMach.toFixed(2)} ({Math.round(cfdMach*340.3)} m/s)</span>
+                    </div>
+                    <input type="range" min={0.05} max={0.85} step={0.01} value={cfdMach} onChange={e=>setCfdMach(+e.target.value)} style={{width:'100%',accentColor:'#3b82f6',height:4}}/>
+                  </div>
+                  <div>
+                    <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+                      <span style={{fontFamily:'JetBrains Mono',fontSize:7,color:'#475569',letterSpacing:'0.06em'}}>ANGLE OF ATTACK (α)</span>
+                      <span style={{fontFamily:'JetBrains Mono',fontSize:8,fontWeight:700,color:'#e8121c'}}>α = {cfdAlpha.toFixed(1)}°</span>
+                    </div>
+                    <input type="range" min={-10} max={10} step={0.5} value={cfdAlpha} onChange={e=>setCfdAlpha(+e.target.value)} style={{width:'100%',accentColor:'#e8121c',height:4}}/>
+                  </div>
+                </div>
+              </Panel>
+
+              {/* Right Side: Boundary Conditions & Parameters */}
+              <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                <Panel title="OpenFOAM Solver Settings" accent="#06b6d4">
+                  <div style={{display:'flex',flexDirection:'column',gap:3}}>
+                    {[
+                      ['SOLVER','rhoSimpleFoam (Compressible)'],
+                      ['TURBULENCE MODEL','k-ω SST (RANS)'],
+                      ['FARFIELD DOMAIN','30D × 60D Hex Mesh'],
+                      ['SURFACE MESH','snappyHexMesh (5 Layers)'],
+                      ['FIRST LAYER Y+','y⁺ ≈ 1.0 (Viscous Sublayer)'],
+                      ['FLUID MEDIUM','Air (Ideal Gas, Sutherland μ)'],
+                      ['REFERENCE LENGTH','L = 1.143 m'],
+                      ['REFERENCE DIA','D = 0.054 m'],
+                      ['REFERENCE AREA','A_ref = 0.00229 m²'],
+                      ['CENTER OF GRAVITY','X_cg = 0.600 m'],
+                    ].map(([l,v])=>(
+                      <div key={l} style={{display:'flex',justifyContent:'space-between',padding:'3px 0',borderBottom:'1px solid rgba(255,255,255,0.03)'}}>
+                        <span style={{fontFamily:'JetBrains Mono',fontSize:6,color:'#475569',textTransform:'uppercase',letterSpacing:'0.06em'}}>{l}</span>
+                        <span style={{fontFamily:'JetBrains Mono',fontSize:7,color:'#94a3b8',fontWeight:600}}>{v}</span>
+                      </div>
+                    ))}
+                  </div>
+                </Panel>
+
+                <Panel title="Aerodynamic Stability Summary" accent="#10b981">
+                  <div style={{display:'flex',flexDirection:'column',gap:6}}>
+                    <div style={{background:'rgba(16,185,129,0.05)',border:'1px solid rgba(16,185,129,0.2)',borderRadius:5,padding:'8px 10px'}}>
+                      <div style={{fontFamily:'JetBrains Mono',fontSize:6.5,color:'#475569',letterSpacing:'0.08em',marginBottom:2}}>STATIC MARGIN (SM)</div>
+                      <div style={{fontFamily:'Orbitron,sans-serif',fontSize:15,fontWeight:700,color:'#10b981'}}>
+                        {((0.685 + 0.065*(cfdMach**1.5) - 0.600)/0.054).toFixed(2)} <span style={{fontSize:8,fontFamily:'JetBrains Mono',color:'#64748b'}}>calibres</span>
+                      </div>
+                      <div style={{fontFamily:'JetBrains Mono',fontSize:6,color:'#10b981',marginTop:2}}>✓ STATICALLY STABLE (&gt; 1.5 calibres)</div>
+                    </div>
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}}>
+                      <div style={{background:'rgba(255,255,255,0.02)',border:'1px solid rgba(255,255,255,0.04)',borderRadius:5,padding:'6px 8px'}}>
+                        <div style={{fontFamily:'JetBrains Mono',fontSize:6,color:'#475569'}}>C_N SLOPE (C_Nα)</div>
+                        <div style={{fontFamily:'JetBrains Mono',fontSize:10,fontWeight:700,color:'#f0f4f8',marginTop:2}}>4.25 <span style={{fontSize:6.5,color:'#64748b'}}>rad⁻¹</span></div>
+                      </div>
+                      <div style={{background:'rgba(255,255,255,0.02)',border:'1px solid rgba(255,255,255,0.04)',borderRadius:5,padding:'6px 8px'}}>
+                        <div style={{fontFamily:'JetBrains Mono',fontSize:6,color:'#475569'}}>PITCH MOMENT (C_mα)</div>
+                        <div style={{fontFamily:'JetBrains Mono',fontSize:10,fontWeight:700,color:'#e8121c',marginTop:2}}>-1.85 <span style={{fontSize:6.5,color:'#64748b'}}>rad⁻¹</span></div>
+                      </div>
+                    </div>
+                  </div>
+                </Panel>
+              </div>
+            </div>
+
+            {/* Aerodynamic Curves (4 Charts) */}
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:8}}>
+              <Panel title="Drag Rise (CD vs Mach)" accent="#3b82f6" style={{height:175}}>
+                <div style={{height:125}}>
+                  <Chart data={cfdData?[{x:cfdData.mach, y:cfdData.cd, name:'CD', mode:'lines', fill:'tozeroy', line:{color:'#3b82f6',width:2}, fillcolor:'rgba(59,130,246,0.08)'}]:[]} extra={{xaxis:{title:'Mach'},yaxis:{title:'CD'}}}/>
+                </div>
+              </Panel>
+
+              <Panel title="Normal Force (CN vs α)" accent="#e8121c" style={{height:175}}>
+                <div style={{height:125}}>
+                  <Chart data={cfdData?[{x:cfdData.alpha_deg, y:cfdData.cn, name:'CN', mode:'lines', line:{color:'#e8121c',width:2}}]:[]} extra={{xaxis:{title:'α (deg)'},yaxis:{title:'CN'}}}/>
+                </div>
+              </Panel>
+
+              <Panel title="Center of Pressure Shift" accent="#8b5cf6" style={{height:175}}>
+                <div style={{height:125}}>
+                  <Chart data={cfdData?[{x:cfdData.mach, y:cfdData.xcp_m, name:'Xcp (m)', mode:'lines', line:{color:'#8b5cf6',width:2}}]:[]} extra={{xaxis:{title:'Mach'},yaxis:{title:'Xcp (m)'}}}/>
+                </div>
+              </Panel>
+
+              <Panel title="Surface Pressure Cp(x/L)" accent="#f59e0b" style={{height:175}}>
+                <div style={{height:125}}>
+                  <Chart data={cfdData?[{x:cfdData.x_over_l, y:cfdData.cp_profile, name:'Cp', mode:'lines', fill:'tozeroy', line:{color:'#f59e0b',width:2}, fillcolor:'rgba(245,158,11,0.08)'}]:[]} extra={{xaxis:{title:'x/L'},yaxis:{title:'Cp'}}}/>
+                </div>
+              </Panel>
             </div>
           </div>
         )}

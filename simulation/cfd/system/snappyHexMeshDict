@@ -1,0 +1,129 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  v2406                                 |
+|   \\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      snappyHexMeshDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+castellatedMesh true;
+snap            true;
+addLayers       true;
+
+geometry
+{
+    project_neal.stl
+    {
+        type triSurfaceMesh;
+        name rocket;
+    }
+    
+    wakeBox
+    {
+        type box;
+        min (0.8 -0.3 -0.3);
+        max (3.5  0.3  0.3);
+    }
+}
+
+castellatedMeshControls
+{
+    maxLocalCells 2000000;
+    maxGlobalCells 10000000;
+    minRefinementCells 10;
+    nCellsBetweenLevels 3;
+
+    features
+    (
+        {
+            file "project_neal.eMesh";
+            level 4;
+        }
+    );
+
+    refinementSurfaces
+    {
+        rocket
+        {
+            level (3 4);
+            patchInfo
+            {
+                type wall;
+            }
+        }
+    }
+
+    resolveFeatureAngle 30;
+
+    refinementRegions
+    {
+        wakeBox
+        {
+            mode inside;
+            levels ((1.0 3));
+        }
+    }
+
+    locationInMesh (0.1 1.5 0.1);
+
+    allowFreeStandingZoneFaces true;
+}
+
+snapControls
+{
+    nSolveIter 30;
+    nRelaxIter 5;
+    nFeatureSnapIter 10;
+    implicitFeatureSnap true;
+    explicitFeatureSnap false;
+    multiRegionFeatureSnap false;
+}
+
+addLayersControls
+{
+    relativeSizes true;
+    layers
+    {
+        "rocket.*"
+        {
+            nSurfaceLayers 5;
+        }
+    }
+    expansionRatio 1.2;
+    finalLayerThickness 0.4;
+    minThickness 0.1;
+    nGrow 0;
+}
+
+meshQualityControls
+{
+    maxNonOrtho 65;
+    maxSkewness 4.0;
+    maxInternalSkewness 4.0;
+    maxConcave 80;
+    minVol 1e-13;
+    minTetQuality 1e-30;
+    minArea -1;
+    minTwist 0.05;
+    minDeterminant 0.001;
+    minFaceWeight 0.05;
+    minVolRatio 0.01;
+    mustNotInclude []
+}
+
+writeFlags
+(
+    scalarLevels
+);
+
+mergeTolerance 1e-6;
+
+// ************************************************************************* //

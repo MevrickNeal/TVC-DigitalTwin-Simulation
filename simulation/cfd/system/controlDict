@@ -1,0 +1,59 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  v2406                                 |
+|   \\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      controlDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+application     rhoSimpleFoam;
+
+startFrom       startTime;
+startTime       0;
+stopAt          endTime;
+endTime         1000;
+deltaT          1;
+
+writeControl    timeStep;
+writeInterval   200;
+
+purgeWrite      5;
+
+writeFormat     ascii;
+writePrecision  8;
+writeCompression off;
+
+timeFormat      general;
+timePrecision   6;
+
+runTimeModifiable true;
+
+functions
+{
+    forceCoeffs1
+    {
+        type            forceCoeffs;
+        libs            ("libforces.so");
+        writeControl    timeStep;
+        timeInterval    1;
+        log             true;
+        patches         (rocket);
+        rho             rhoInf;
+        rhoInf          1.225;
+        cofR            (0.4 0 0);  // Center of Rotation / CG (m)
+        pitchAxis       (0 0 1);
+        magUInf         34.0;       // Mach 0.1 velocity
+        lRef            1.143;      // Rocket length (m)
+        Aref            0.00229;    // Reference frontal area (pi*r^2 = pi*(0.027)^2 m2)
+    }
+}
+
+// ************************************************************************* //
