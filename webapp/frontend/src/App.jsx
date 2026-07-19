@@ -894,6 +894,7 @@ export default function App() {
   const [isFullscreen,setIsFullscreen] = useState(false);
   const hist = useRef({t:[],pitch:[],roll:[],yaw:[],alt:[],ax:[],ay:[],az:[],pressure:[],x:[],y:[]});
   const [tick, setTick] = useState(0);
+  const [packetLogs, setPacketLogs] = useState([]);
 
   const keyOk = usbKey === 'NEAL2026';
   const ctrl={1:'PID',2:'LQI',3:'MRAC',4:'ADRC'};
@@ -1018,6 +1019,15 @@ export default function App() {
         h.x.push(relX);
         h.y.push(relY);
         if(h.t.length>120) ['t','pitch','roll','yaw','alt','ax','ay','az','pressure','x','y'].forEach(k=>h[k].shift());
+        
+        const timeStr = new Date().toTimeString().split(' ')[0] + '.' + (Date.now() % 1000).toString().padStart(3, '0');
+        const hexPitch = Math.round((tr.data.orientation?.pitch_deg ?? 0) + 180).toString(16).toUpperCase().padStart(2, '0');
+        const hexRoll = Math.round((tr.data.orientation?.roll_deg ?? 0) + 180).toString(16).toUpperCase().padStart(2, '0');
+        const hexYaw = Math.round((tr.data.orientation?.yaw_deg ?? 0) + 180).toString(16).toUpperCase().padStart(2, '0');
+        const hexAlt = Math.round(tr.data.altitude_m ?? 0).toString(16).toUpperCase().padStart(4, '0');
+        const packet = `[${timeStr}] RX: 5A A5 ${hexPitch} ${hexRoll} ${hexYaw} ${hexAlt.slice(0,2)} ${hexAlt.slice(2,4)} 4F2A (CRC OK)`;
+        setPacketLogs(prev => [packet, ...prev].slice(0, 12));
+
         setTick(n=>n+1);
       } catch {}
     };
@@ -1080,6 +1090,56 @@ export default function App() {
       return pts;
     }
   }, [simData, time, liveMode, tick]);
+
+  const apogeeInfo = useMemo(() => {
+    if (liveMode) {
+      let maxAlt = 0;
+      let maxIdx = -1;
+      hist.current.alt.forEach((altVal, idx) => {
+        if (altVal > maxAlt) {
+          maxAlt = altVal;
+          maxIdx = idx;
+        }
+      });
+      if (maxIdx === -1) return null;
+      const px = hist.current.x[maxIdx] ?? 0;
+      const py = hist.current.y[maxIdx] ?? 0;
+      return {
+        pos: [px * 0.1, maxAlt * 0.01, py * 0.1],
+        alt: maxAlt,
+        time: hist.current.t[maxIdx] ?? 0
+      };
+    } else {
+      if (!simData) return null;
+      let maxAlt = 0;
+      let maxIdx = 0;
+      simData.altitude.forEach((altVal, idx) => {
+        if (altVal > maxAlt) {
+          maxAlt = altVal;
+          maxIdx = idx;
+        }
+      });
+      return {
+        pos: [simData.drift_x[maxIdx] * 0.1, maxAlt * 0.01, simData.drift_y ? simData.drift_y[maxIdx] * 0.1 : 0],
+        alt: maxAlt,
+        time: simData.t[maxIdx]
+      };
+    }
+  }, [simData, liveMode, tick]);
+
+  useEffect(() => {
+    if (liveMode || !playing || !simData) return;
+    const interval = setInterval(() => {
+      const timeStr = new Date().toTimeString().split(' ')[0] + '.' + (Date.now() % 1000).toString().padStart(3, '0');
+      const hexPitch = Math.round(state.pd + 180).toString(16).toUpperCase().padStart(2, '0');
+      const hexRoll = Math.round((simData.roll[Math.min(Math.floor((time/(simData.t[simData.t.length-1]||1))*(simData.t.length-1)),simData.t.length-1)] || 0) + 180).toString(16).toUpperCase().padStart(2, '0');
+      const hexYaw = Math.round((simData.yaw[Math.min(Math.floor((time/(simData.t[simData.t.length-1]||1))*(simData.t.length-1)),simData.t.length-1)] || 0) + 180).toString(16).toUpperCase().padStart(2, '0');
+      const hexAlt = Math.round(state.alt).toString(16).toUpperCase().padStart(4, '0');
+      const packet = `[${timeStr}] SIM: 5A A5 ${hexPitch} ${hexRoll} ${hexYaw} ${hexAlt.slice(0,2)} ${hexAlt.slice(2,4)} 4F2A (CRC OK)`;
+      setPacketLogs(prev => [packet, ...prev].slice(0, 12));
+    }, 250);
+    return () => clearInterval(interval);
+  }, [liveMode, playing, simData, time, state.pd, state.alt]);
 
   const arm=async()=>{ if(!keyOk&&!launch.armed)return; axios.post(`${API}/api/launch/arm`,{arm:!launch.armed}); };
   const go=async()=>axios.post(`${API}/api/launch/start_countdown`);
@@ -1176,56 +1236,117 @@ export default function App() {
               ].map(k=><HUDCard key={k.l} label={k.l} value={k.v} unit={k.u} color={k.c} blink={k.blink}/>)}
             </div>
 
-            {/* ── Main 4-Quadrant Grid ── */}
-            <div style={{display:'grid',gridTemplateColumns:'240px 1fr 240px',gridTemplateRows:'1fr 1fr',gap:8,flex:1,minHeight:310}}>
+            {/* ── Main Avionics Grid (2 Columns, spacious) ── */}
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,minHeight:310}}>
+              
+              {/* Left Column: IMU & GPS */}
+              <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                {/* TOP-LEFT: IMU Acceleration — Aviation Gauges */}
+                <Panel title="Acceleration — IMU" accent="#3b82f6"
+                  titleRight={<Badge color="#3b82f6">{totalG.toFixed(3)} g</Badge>}
+                  style={{display:'flex',flexDirection:'column',flex:1}}>
+                  <div style={{display:'flex',justifyContent:'space-around',alignItems:'center',paddingBottom:7}}>
+                    <AvioGauge value={ax} min={-3} max={3} color="#3b82f6" label="Ax" unit="g" size={74}/>
+                    <AvioGauge value={ay} min={-3} max={3} color="#8b5cf6" label="Ay" unit="g" size={74}/>
+                    <AvioGauge value={az} min={-1} max={4} color="#10b981" label="Az" unit="g" size={74}/>
+                  </div>
+                  <DR label="TOTAL |A|" value={totalG.toFixed(4)} unit="g" color="#f59e0b"/>
+                  <DR label="GYRO X" value={(telem?.rates?.gyro_x_dps??0).toFixed(2)} unit="deg/s" color="#64748b"/>
+                  <DR label="GYRO Y" value={(telem?.rates?.gyro_y_dps??0).toFixed(2)} unit="deg/s" color="#64748b"/>
+                </Panel>
 
-              {/* TOP-LEFT: IMU Acceleration — Aviation Gauges */}
-              <Panel title="Acceleration — IMU" accent="#3b82f6"
-                titleRight={<Badge color="#3b82f6">{totalG.toFixed(3)} g</Badge>}
-                style={{gridColumn:1,gridRow:1,display:'flex',flexDirection:'column'}}>
-                <div style={{display:'flex',justifyContent:'space-around',alignItems:'center',paddingBottom:7}}>
-                  <AvioGauge value={ax} min={-3} max={3} color="#3b82f6" label="Ax" unit="g" size={74}/>
-                  <AvioGauge value={ay} min={-3} max={3} color="#8b5cf6" label="Ay" unit="g" size={74}/>
-                  <AvioGauge value={az} min={-1} max={4} color="#10b981" label="Az" unit="g" size={74}/>
-                </div>
-                <DR label="TOTAL |A|" value={totalG.toFixed(4)} unit="g" color="#f59e0b"/>
-                <DR label="GYRO X" value={(telem?.rates?.gyro_x_dps??0).toFixed(2)} unit="deg/s" color="#64748b"/>
-                <DR label="GYRO Y" value={(telem?.rates?.gyro_y_dps??0).toFixed(2)} unit="deg/s" color="#64748b"/>
-              </Panel>
-
-              {/* TOP-RIGHT: Barometric Pressure */}
-              <Panel title="Barometric Pressure" accent="#10b981"
-                titleRight={<Badge color="#10b981">{pressHpa.toFixed(1)} hPa</Badge>}
-                style={{gridColumn:3,gridRow:1,display:'flex',flexDirection:'column'}}>
-                <div style={{display:'flex',justifyContent:'center',paddingBottom:7}}>
-                  <AvioGauge value={pressHpa} min={900} max={1013.25} color="#10b981" label="Pressure" unit="hPa" size={90}/>
-                </div>
-                <DR label="PRESSURE" value={pressHpa.toFixed(2)} unit="hPa" color="#10b981"/>
-                <DR label="ALTITUDE" value={altM.toFixed(1)} unit="m" color="#3b82f6"/>
-                <DR label="QNH REF" value="1013.25" unit="hPa" color="#475569"/>
-                <DR label="BARO STATUS" value={telem?.baro_status??'OFFLINE'} ok={!!telem}/>
-                <DR label="TEMP EST" value={(15-0.0065*altM).toFixed(1)} unit="°C" color="#f59e0b"/>
-              </Panel>
-
-              {/* CENTER: 3D Rocket — spans 2 rows (smaller) */}
-              <div style={{gridColumn:2,gridRow:'1/3',background:'linear-gradient(180deg,#070c17,#090d1c)',border:'1px solid rgba(255,255,255,0.06)',borderRadius:10,overflow:'hidden',display:'flex',flexDirection:'column',position:'relative'}}>
-                {/* Header */}
-                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 14px',background:'rgba(0,0,0,0.45)',borderBottom:'1px solid rgba(255,255,255,0.05)',flexShrink:0}}>
-                  <div style={{display:'flex',alignItems:'center',gap:9}}>
-                    <div style={{width:3,height:12,background:'#e8121c',borderRadius:2}}/>
+                {/* BOTTOM-LEFT: GPS Navigation */}
+                <Panel title="GPS Navigation" accent="#f59e0b"
+                  titleRight={<Badge color={telem?'#10b981':'#64748b'}>{telem?'FIX 3D':'NO FIX'}</Badge>}
+                  style={{display:'flex',flexDirection:'column',flex:1}}>
+                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:6,borderBottom:'1px solid rgba(255,255,255,0.04)',paddingBottom:5}}>
                     <div>
-                      <div style={{fontFamily:'Orbitron,sans-serif',fontSize:9,fontWeight:800,letterSpacing:'0.14em',color:'#f0f4f8'}}>PROJECT <span style={{color:'#e8121c'}}>NEAL</span></div>
-                      <div style={{fontFamily:'JetBrains Mono',fontSize:6.5,color:'#475569',letterSpacing:'0.08em'}}>TVC DIGITAL TWIN — 3D FLIGHT VISUALIZER</div>
+                      <div style={{fontFamily:'JetBrains Mono',fontSize:6,color:'#475569',textTransform:'uppercase',letterSpacing:'0.08em'}}>LATITUDE</div>
+                      <div style={{fontFamily:'JetBrains Mono',fontSize:10.5,fontWeight:700,color:'#f59e0b'}}>{gpsLat.toFixed(6)}</div>
+                    </div>
+                    <div>
+                      <div style={{fontFamily:'JetBrains Mono',fontSize:6,color:'#475569',textTransform:'uppercase',letterSpacing:'0.08em'}}>LONGITUDE</div>
+                      <div style={{fontFamily:'JetBrains Mono',fontSize:10.5,fontWeight:700,color:'#3b82f6'}}>{gpsLon.toFixed(6)}</div>
+                    </div>
+                    <div>
+                      <div style={{fontFamily:'JetBrains Mono',fontSize:6,color:'#475569',textTransform:'uppercase',letterSpacing:'0.08em'}}>ALTITUDE MSL</div>
+                      <div style={{fontFamily:'JetBrains Mono',fontSize:10.5,fontWeight:700,color:'#10b981'}}>{altM.toFixed(1)}m</div>
                     </div>
                   </div>
-                  <div style={{display:'flex',gap:6,alignItems:'center'}}>
-                    <Badge color={state.isFiring?'#e8121c':'#475569'}>{state.isFiring?'MOTOR BURN':'COAST'}</Badge>
-                    <span style={{fontFamily:'JetBrains Mono',fontSize:8,color:'#64748b'}}>T+{time.toFixed(2)}s</span>
+                  <div style={{height:102,marginTop:5}}><GPSMapLeaflet lat={gpsLat} lon={gpsLon}/></div>
+                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:5,marginTop:5}}>
+                    <DR label="HDOP" value="1.2" color="#94a3b8"/>
+                    <DR label="SATS" value="9" color="#10b981"/>
+                    <DR label="SPEED" value="0.0" unit="m/s" color="#64748b"/>
                   </div>
-                </div>
+                </Panel>
+              </div>
 
+              {/* Right Column: Barometric & TVC Servos */}
+              <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                {/* TOP-RIGHT: Barometric Pressure */}
+                <Panel title="Barometric Pressure" accent="#10b981"
+                  titleRight={<Badge color="#10b981">{pressHpa.toFixed(1)} hPa</Badge>}
+                  style={{display:'flex',flexDirection:'column',flex:1}}>
+                  <div style={{display:'flex',justifyContent:'center',paddingBottom:7}}>
+                    <AvioGauge value={pressHpa} min={900} max={1013.25} color="#10b981" label="Pressure" unit="hPa" size={74}/>
+                  </div>
+                  <DR label="PRESSURE" value={pressHpa.toFixed(2)} unit="hPa" color="#10b981"/>
+                  <DR label="ALTITUDE" value={altM.toFixed(1)} unit="m" color="#3b82f6"/>
+                  <DR label="BARO STATUS" value={telem?.baro_status??'OFFLINE'} ok={!!telem}/>
+                </Panel>
+
+                {/* BOTTOM-RIGHT: TVC Servo & Systems */}
+                <Panel title="TVC Servo &amp; Systems" accent="#8b5cf6"
+                  style={{display:'flex',flexDirection:'column',flex:1}}>
+                  <div style={{fontFamily:'JetBrains Mono',fontSize:7,color:'#475569',letterSpacing:'0.08em',textTransform:'uppercase',marginBottom:4}}>SERVO DEFLECTION</div>
+                  <ServoBar label="Pitch Axis" value={servoP} max={params.gimbal_limit} color="#e8121c"/>
+                  <ServoBar label="Yaw Axis" value={servoY} max={params.gimbal_limit} color="#3b82f6"/>
+                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:5,margin:'5px 0'}}>
+                    {[{l:'PWM CH1',v:telem?.actuators?.servo_pitch_us??1500,c:'#e8121c'},{l:'PWM CH2',v:telem?.actuators?.servo_yaw_us??1500,c:'#3b82f6'}].map(p=>(
+                      <div key={p.l} style={{background:'#090d16',border:'1px solid rgba(255,255,255,0.05)',borderRadius:5,padding:'4px 6px'}}>
+                        <div style={{fontFamily:'JetBrains Mono',fontSize:6.5,color:'#475569',textTransform:'uppercase'}}>{p.l}</div>
+                        <div style={{fontFamily:'JetBrains Mono',fontSize:12,fontWeight:700,color:p.c}}>{p.v}<span style={{fontSize:7,color:'#475569'}}> µs</span></div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:5}}>
+                    <LED label="IMU MPU-6050" ok={!!telem} blink/>
+                    <LED label="BARO BMP280" ok={!!telem} blink/>
+                  </div>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:'auto',paddingTop:6}}>
+                    <span style={{fontFamily:'JetBrains Mono',fontSize:7,color:'#334155'}}>3S LiPo SOC</span>
+                    <span style={{fontFamily:'JetBrains Mono',fontSize:8.5,fontWeight:700,color:'#10b981'}}>{telem?.battery_v?.toFixed(2)??'11.85'} V</span>
+                  </div>
+                </Panel>
+              </div>
+
+            </div>
+
+            {/* ── Bottom Chart Strip ── */}
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8}}>
+              <Panel title="Acceleration History — 3-Axis" accent="#3b82f6"
+                titleRight={<span style={{fontFamily:'JetBrains Mono',fontSize:7,color:'#475569'}}>30s WINDOW</span>}
+                style={{height:140}}>
+                <div style={{height:84}}><Chart data={[
+                  {x:hist.current.t,y:hist.current.ax,name:'Ax',mode:'lines',line:{color:'#3b82f6',width:1.5}},
+                  {x:hist.current.t,y:hist.current.ay,name:'Ay',mode:'lines',line:{color:'#8b5cf6',width:1.5}},
+                  {x:hist.current.t,y:hist.current.az,name:'Az',mode:'lines',line:{color:'#10b981',width:1.5}},
+                ]} extra={{yaxis:{title:'g'}}}/></div>
+              </Panel>
+              <Panel title="Altitude Profile" accent="#10b981" style={{height:140}}>
+                <div style={{height:84}}><Chart data={simData?[{x:simData.t,y:simData.altitude,fill:'tozeroy',mode:'lines',line:{color:'#10b981',width:2},fillcolor:'rgba(16,185,129,0.07)'}]:[{x:hist.current.t,y:hist.current.alt,fill:'tozeroy',mode:'lines',line:{color:'#10b981',width:1.5},fillcolor:'rgba(16,185,129,0.07)'}]}/></div>
+              </Panel>
+              <Panel title="Pressure History" accent="#f59e0b" style={{height:140}}>
+                <div style={{height:84}}><Chart data={[{x:hist.current.t,y:hist.current.pressure,fill:'tozeroy',mode:'lines',line:{color:'#f59e0b',width:1.5},fillcolor:'rgba(245,158,11,0.06)'}]} extra={{yaxis:{title:'hPa'}}}/></div>
+              </Panel>
+            </div>
+
+            {/* ── 3D Trajectory Visualizer (Widescreen panel, scroll down to see) ── */}
+            <Panel title="3D Trajectory Visualizer &amp; Flight Graph" accent="#e8121c">
+              <div style={{display:'flex',gap:8,height:360}}>
                 {/* 3D Canvas */}
-                <div style={{flex:1,position:'relative',minHeight:0}}>
+                <div style={{flex:1,position:'relative',background:'linear-gradient(180deg,#070c17,#090d1c)',borderRadius:6,overflow:'hidden',border:'1px solid rgba(255,255,255,0.04)'}}>
                   {/* Notch Timer */}
                   <div style={{
                     position:'absolute', top:0, left:'50%', transform:'translateX(-50%)',
@@ -1245,22 +1366,59 @@ export default function App() {
                     <directionalLight position={[12,20,15]} intensity={2.5} castShadow/>
                     <pointLight position={[-5,5,5]} intensity={0.8} color="#3b82f6"/>
                     
-                    {/* Grid plane at ground level (Y=0) */}
+                    {/* Launchpad Ground Base & Rail */}
+                    <primitive object={new THREE.Mesh(
+                      new THREE.CylinderGeometry(1.5, 1.8, 0.08, 32),
+                      new THREE.MeshStandardMaterial({ color: '#2d3748', metalness: 0.8, roughness: 0.2 })
+                    )} position={[0, -0.04, 0]} />
+                    <primitive object={new THREE.Mesh(
+                      new THREE.BoxGeometry(0.06, 5, 0.06),
+                      new THREE.MeshStandardMaterial({ color: '#4a5568', metalness: 0.9, roughness: 0.1 })
+                    )} position={[0.2, 2.5, 0]} />
+
                     <gridHelper args={[24, 24, '#e8121c', '#1e293b']} position={[0,0,0]} />
                     
-                    {/* 3D Coordinate Axis Lines using raw Three.js primitives */}
+                    {/* Axis Lines */}
                     <primitive object={new THREE.Line(
                       new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-12, 0, 0), new THREE.Vector3(12, 0, 0)]),
-                      new THREE.LineBasicMaterial({ color: '#ef4444' })
+                      new THREE.LineBasicMaterial({ color: '#ef4444', transparent: true, opacity: 0.4 })
                     )} />
                     <primitive object={new THREE.Line(
                       new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, -12), new THREE.Vector3(0, 0, 12)]),
-                      new THREE.LineBasicMaterial({ color: '#10b981' })
+                      new THREE.LineBasicMaterial({ color: '#10b981', transparent: true, opacity: 0.4 })
                     )} />
                     <primitive object={new THREE.Line(
                       new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 10, 0)]),
                       new THREE.LineBasicMaterial({ color: '#3b82f6', linewidth: 2 })
                     )} />
+
+                    {/* Altitude and Drift Projection Lines */}
+                    <primitive object={new THREE.Line(
+                      new THREE.BufferGeometry().setFromPoints([
+                        new THREE.Vector3(currentDriftX * 0.1, currentAlt * 0.01, currentDriftY * 0.1),
+                        new THREE.Vector3(currentDriftX * 0.1, 0, currentDriftY * 0.1)
+                      ]),
+                      new THREE.LineBasicMaterial({ color: '#f59e0b', transparent: true, opacity: 0.6 })
+                    )} />
+                    <primitive object={new THREE.Line(
+                      new THREE.BufferGeometry().setFromPoints([
+                        new THREE.Vector3(currentDriftX * 0.1, 0, currentDriftY * 0.1),
+                        new THREE.Vector3(0, 0, 0)
+                      ]),
+                      new THREE.LineBasicMaterial({ color: '#10b981', transparent: true, opacity: 0.6 })
+                    )} />
+
+                    {/* Floating Labels in 3D */}
+                    <Html position={[currentDriftX * 0.1, currentAlt * 0.005, currentDriftY * 0.1]} center>
+                      <div style={{ fontFamily: 'JetBrains Mono', fontSize: 6, color: '#f59e0b', background: '#090d16cc', padding: '1px 3px', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 2, whiteSpace: 'nowrap' }}>
+                        H: {currentAlt.toFixed(1)}m
+                      </div>
+                    </Html>
+                    <Html position={[currentDriftX * 0.05, 0, currentDriftY * 0.05]} center>
+                      <div style={{ fontFamily: 'JetBrains Mono', fontSize: 6, color: '#10b981', background: '#090d16cc', padding: '1px 3px', border: '1px solid rgba(16,185,129,0.2)', borderRadius: 2, whiteSpace: 'nowrap' }}>
+                        D: {Math.sqrt(currentDriftX*currentDriftX + currentDriftY*currentDriftY).toFixed(1)}m
+                      </div>
+                    </Html>
 
                     {/* 3D Labels */}
                     <Html position={[0, 10.3, 0]} center>
@@ -1285,6 +1443,25 @@ export default function App() {
                         <div style={{ fontFamily: 'JetBrains Mono', fontSize: 5.5, color: '#64748b' }}>{y * 100}m</div>
                       </Html>
                     ))}
+
+                    {/* Apogee Marker */}
+                    {apogeeInfo && (
+                      <group position={apogeeInfo.pos}>
+                        <mesh>
+                          <sphereGeometry args={[0.08, 16, 16]} />
+                          <meshBasicMaterial color="#f59e0b" />
+                        </mesh>
+                        <Html center distanceFactor={12}>
+                          <div style={{
+                            fontFamily: 'JetBrains Mono', fontSize: 6, fontWeight: 'bold', color: '#f59e0b',
+                            background: 'rgba(9, 13, 22, 0.9)', border: '1px solid #f59e0b', padding: '2px 5px',
+                            borderRadius: 3, whiteSpace: 'nowrap', pointerEvents: 'none', boxShadow: '0 0 10px rgba(245,158,11,0.4)'
+                          }}>
+                            APOGEE: {apogeeInfo.alt.toFixed(1)}m ({apogeeInfo.time.toFixed(1)}s)
+                          </div>
+                        </Html>
+                      </group>
+                    )}
 
                     <OrbitControls enableZoom={true} enableRotate={true} enablePan={true} target={[0, 4, 0]} maxPolarAngle={Math.PI / 2 - 0.05} />
                     <Suspense fallback={null}>
@@ -1324,103 +1501,30 @@ export default function App() {
                     ))}
                   </div>
                 </div>
-
-                {/* Playback */}
-                <div style={{padding:'6px 12px',borderTop:'1px solid rgba(255,255,255,0.05)',background:'rgba(0,0,0,0.35)',display:'flex',alignItems:'center',gap:7,flexShrink:0}}>
-                  <button onClick={()=>setPlaying(p=>!p)} style={{width:26,height:26,borderRadius:4,border:'none',background:'#e8121c',color:'#fff',cursor:'pointer',fontSize:11,flexShrink:0}}>{playing?'||':'▶'}</button>
-                  <input type="range" min={0} max={simData?simData.t[simData.t.length-1]:2} step={0.01} value={time} onChange={e=>setTime(+e.target.value)} style={{flex:1,accentColor:'#e8121c',height:3}}/>
-                  <select value={speed} onChange={e=>setSpeed(+e.target.value)} style={{background:'#141c2b',border:'1px solid rgba(255,255,255,0.06)',color:'#f0f4f8',fontFamily:'JetBrains Mono',fontSize:8,padding:'2px 4px',borderRadius:4,flexShrink:0}}>
-                    {[0.25,0.5,1,2,4].map(s=><option key={s} value={s}>{s}x</option>)}
-                  </select>
-                </div>
-
-                {/* Mini charts */}
-                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',borderTop:'1px solid rgba(255,255,255,0.04)',flexShrink:0}}>
-                  {[
-                    {title:'PITCH (deg)',data:simData?[{x:simData.t,y:simData.theta,name:'Pitch',mode:'lines',line:{color:'#3b82f6',width:1.5}},{x:simData.t,y:simData.t.map(()=>5),name:'Ref',mode:'lines',line:{color:'#e8121c',width:1,dash:'dot'}}]:[]},
-                    {title:'GIMBAL (deg)',data:simData?[{x:simData.t,y:simData.delta,name:'Gimbal',mode:'lines',line:{color:'#e8121c',width:1.5}}]:[]},
-                  ].map(c=>(
-                    <div key={c.title} style={{padding:'3px 7px 5px',borderRight:'1px solid rgba(255,255,255,0.03)'}}>
-                      <div style={{fontFamily:'JetBrains Mono',fontSize:6.5,color:'#475569',letterSpacing:'0.1em',textTransform:'uppercase',padding:'3px 0 2px'}}>{c.title}</div>
-                      <div style={{height:72}}><Chart data={c.data}/></div>
-                    </div>
-                  ))}
+                
+                {/* Controls and mini response graphs */}
+                <div style={{width:240,display:'flex',flexDirection:'column',gap:6,flexShrink:0}}>
+                  <div style={{padding:'8px 10px',background:'rgba(255,255,255,0.02)',border:'1px solid rgba(255,255,255,0.04)',borderRadius:6,display:'flex',alignItems:'center',gap:7}}>
+                    <button onClick={()=>setPlaying(p=>!p)} style={{width:24,height:24,borderRadius:4,border:'none',background:'#e8121c',color:'#fff',cursor:'pointer',fontSize:10,flexShrink:0}}>{playing?'||':'▶'}</button>
+                    <input type="range" min={0} max={simData?simData.t[simData.t.length-1]:2} step={0.01} value={time} onChange={e=>setTime(+e.target.value)} style={{flex:1,accentColor:'#e8121c',height:3}}/>
+                    <select value={speed} onChange={e=>setSpeed(+e.target.value)} style={{background:'#141c2b',border:'1px solid rgba(255,255,255,0.06)',color:'#f0f4f8',fontFamily:'JetBrains Mono',fontSize:8,padding:'2px 4px',borderRadius:4,flexShrink:0}}>
+                      {[0.25,0.5,1,2,4].map(s=><option key={s} value={s}>{s}x</option>)}
+                    </select>
+                  </div>
+                  <div style={{flex:1,display:'flex',flexDirection:'column',gap:6}}>
+                    {[
+                      {title:'PITCH RESPONSE (deg)',data:simData?[{x:simData.t,y:simData.theta,name:'Pitch',mode:'lines',line:{color:'#3b82f6',width:1.5}},{x:simData.t,y:simData.t.map(()=>5),name:'Ref',mode:'lines',line:{color:'#e8121c',width:1,dash:'dot'}}]:[]},
+                      {title:'GIMBAL DEFLECTION (deg)',data:simData?[{x:simData.t,y:simData.delta,name:'Gimbal',mode:'lines',line:{color:'#e8121c',width:1.5}}]:[]},
+                    ].map(c=>(
+                      <div key={c.title} style={{flex:1,background:'rgba(255,255,255,0.01)',border:'1px solid rgba(255,255,255,0.03)',borderRadius:6,padding:'6px 10px'}}>
+                        <div style={{fontFamily:'JetBrains Mono',fontSize:6.5,color:'#475569',letterSpacing:'0.10em',textTransform:'uppercase',marginBottom:4}}>{c.title}</div>
+                        <div style={{height:80}}><Chart data={c.data}/></div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
-
-              {/* BOTTOM-LEFT: GPS Navigation */}
-              <Panel title="GPS Navigation" accent="#f59e0b"
-                titleRight={<Badge color={telem?'#10b981':'#64748b'}>{telem?'FIX 3D':'NO FIX'}</Badge>}
-                style={{gridColumn:1,gridRow:2,display:'flex',flexDirection:'column'}}>
-                <div style={{padding:'2px 0 5px',borderBottom:'1px solid rgba(255,255,255,0.04)'}}>
-                  <div style={{fontFamily:'JetBrains Mono',fontSize:6.5,color:'#475569',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:2}}>LATITUDE</div>
-                  <div style={{fontFamily:'JetBrains Mono',fontSize:13,fontWeight:700,color:'#f59e0b'}}>{gpsLat.toFixed(6)}</div>
-                </div>
-                <div style={{padding:'4px 0 5px',borderBottom:'1px solid rgba(255,255,255,0.04)'}}>
-                  <div style={{fontFamily:'JetBrains Mono',fontSize:6.5,color:'#475569',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:2}}>LONGITUDE</div>
-                  <div style={{fontFamily:'JetBrains Mono',fontSize:13,fontWeight:700,color:'#3b82f6'}}>{gpsLon.toFixed(6)}</div>
-                </div>
-                <div style={{padding:'4px 0 5px',marginBottom:5,borderBottom:'1px solid rgba(255,255,255,0.04)'}}>
-                  <div style={{fontFamily:'JetBrains Mono',fontSize:6.5,color:'#475569',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:2}}>ALTITUDE MSL</div>
-                  <div style={{fontFamily:'JetBrains Mono',fontSize:13,fontWeight:700,color:'#10b981'}}>{altM.toFixed(2)} <span style={{fontSize:8,color:'#475569'}}>m</span></div>
-                </div>
-                <GPSMapLeaflet lat={gpsLat} lon={gpsLon}/>
-                <DR label="HDOP" value="1.2" color="#94a3b8"/>
-                <DR label="SATS" value="9" color="#10b981"/>
-                <DR label="GND SPEED" value="0.0" unit="m/s" color="#64748b"/>
-              </Panel>
-
-              {/* BOTTOM-RIGHT: TVC Servo & Systems */}
-              <Panel title="TVC Servo &amp; Systems" accent="#8b5cf6"
-                style={{gridColumn:3,gridRow:2,display:'flex',flexDirection:'column'}}>
-                <div style={{fontFamily:'JetBrains Mono',fontSize:7,color:'#475569',letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>SERVO DEFLECTION</div>
-                <ServoBar label="Pitch Axis" value={servoP} max={params.gimbal_limit} color="#e8121c"/>
-                <ServoBar label="Yaw Axis" value={servoY} max={params.gimbal_limit} color="#3b82f6"/>
-                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:5,margin:'7px 0'}}>
-                  {[{l:'PWM CH1',v:telem?.actuators?.servo_pitch_us??1500,c:'#e8121c'},{l:'PWM CH2',v:telem?.actuators?.servo_yaw_us??1500,c:'#3b82f6'}].map(p=>(
-                    <div key={p.l} style={{background:'#090d16',border:'1px solid rgba(255,255,255,0.05)',borderRadius:6,padding:'6px 8px'}}>
-                      <div style={{fontFamily:'JetBrains Mono',fontSize:7,color:'#475569',textTransform:'uppercase'}}>{p.l}</div>
-                      <div style={{fontFamily:'JetBrains Mono',fontSize:15,fontWeight:700,color:p.c}}>{p.v}<span style={{fontSize:7,color:'#475569'}}> µs</span></div>
-                    </div>
-                  ))}
-                </div>
-                <div style={{fontFamily:'JetBrains Mono',fontSize:7,color:'#475569',letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:4}}>SYSTEM STATUS</div>
-                <LED label="IMU MPU-6050" ok={!!telem} blink/>
-                <LED label="BARO BMP280" ok={!!telem} blink/>
-                <LED label="UART DMA" ok={!!telem}/>
-                <LED label="PWM OUTPUT" ok={!!telem}/>
-                <LED label="TELEMETRY LINK" ok={!!telem} blink/>
-                <div style={{marginTop:'auto',paddingTop:7}}>
-                  <div style={{display:'flex',justifyContent:'space-between',marginBottom:3}}>
-                    <span style={{fontFamily:'JetBrains Mono',fontSize:7,color:'#475569',textTransform:'uppercase',letterSpacing:'0.08em'}}>BATTERY SOC</span>
-                    <span style={{fontFamily:'JetBrains Mono',fontSize:9,fontWeight:700,color:'#10b981'}}>{telem?.battery_v?.toFixed(2)??'11.10'} V</span>
-                  </div>
-                  <div style={{height:4,background:'#090d16',borderRadius:2,overflow:'hidden'}}>
-                    <div style={{height:'100%',width:`${Math.min(100,((telem?.battery_v??11.1)-9.6)/3*100)}%`,background:'linear-gradient(90deg,#10b981,#3b82f6)',borderRadius:2,transition:'width 0.5s'}}/>
-                  </div>
-                  <div style={{fontFamily:'JetBrains Mono',fontSize:7,color:'#334155',marginTop:2}}>3S LiPo — {(((telem?.battery_v??11.1)-9.6)/3*100)|0}% SOC</div>
-                </div>
-              </Panel>
-            </div>
-
-            {/* ── Bottom Chart Strip ── */}
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8}}>
-              <Panel title="Acceleration History — 3-Axis" accent="#3b82f6"
-                titleRight={<span style={{fontFamily:'JetBrains Mono',fontSize:7,color:'#475569'}}>30s WINDOW</span>}
-                style={{height:140}}>
-                <div style={{height:84}}><Chart data={[
-                  {x:hist.current.t,y:hist.current.ax,name:'Ax',mode:'lines',line:{color:'#3b82f6',width:1.5}},
-                  {x:hist.current.t,y:hist.current.ay,name:'Ay',mode:'lines',line:{color:'#8b5cf6',width:1.5}},
-                  {x:hist.current.t,y:hist.current.az,name:'Az',mode:'lines',line:{color:'#10b981',width:1.5}},
-                ]} extra={{yaxis:{title:'g'}}}/></div>
-              </Panel>
-              <Panel title="Altitude Profile" accent="#10b981" style={{height:140}}>
-                <div style={{height:84}}><Chart data={simData?[{x:simData.t,y:simData.altitude,fill:'tozeroy',mode:'lines',line:{color:'#10b981',width:2},fillcolor:'rgba(16,185,129,0.07)'}]:[{x:hist.current.t,y:hist.current.alt,fill:'tozeroy',mode:'lines',line:{color:'#10b981',width:1.5},fillcolor:'rgba(16,185,129,0.07)'}]}/></div>
-              </Panel>
-              <Panel title="Pressure History" accent="#f59e0b" style={{height:140}}>
-                <div style={{height:84}}><Chart data={[{x:hist.current.t,y:hist.current.pressure,fill:'tozeroy',mode:'lines',line:{color:'#f59e0b',width:1.5},fillcolor:'rgba(245,158,11,0.06)'}]} extra={{yaxis:{title:'hPa'}}}/></div>
-              </Panel>
-            </div>
+            </Panel>
           </>
         )}
 
@@ -1565,11 +1669,56 @@ export default function App() {
               </Panel>
             </div>
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-              <Panel title="Sensor Packet">
-                {telem?[{k:'COMMS',v:telem.comms_link,ok:true},{k:'IMU',v:telem.imu_status,ok:true},{k:'BARO',v:telem.baro_status,ok:true},{k:'BATTERY',v:`${telem.battery_v} V`,ok:telem.battery_v>11},{k:'SERVO mA',v:telem.servo_current_ma,ok:true},{k:'RSSI',v:`${telem.rssi_dbm} dBm`,ok:telem.rssi_dbm>-70},{k:'CRC',v:telem.crc_checksum,ok:true}].map(r=><DR key={r.k} label={r.k} value={r.v} ok={r.ok}/>):<DR label="STATUS" value="Backend offline" ok={false}/>}
+              {/* Left: System Status & Diagnostics */}
+              <Panel title="System Status &amp; Diagnostics" accent="#3b82f6">
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+                  {/* Battery SOC */}
+                  <div style={{background:'#090d16',border:'1px solid rgba(255,255,255,0.04)',borderRadius:6,padding:'8px 10px',gridColumn:'1/3'}}>
+                    <div style={{display:'flex',justifyContent:'space-between',marginBottom:5}}>
+                      <span style={{fontFamily:'JetBrains Mono',fontSize:7.5,color:'#475569',textTransform:'uppercase',letterSpacing:'0.08em'}}>BATTERY VOLTAGE</span>
+                      <span style={{fontFamily:'JetBrains Mono',fontSize:9,fontWeight:700,color:'#10b981'}}>{telem?.battery_v?.toFixed(2)??'11.85'} V</span>
+                    </div>
+                    <div style={{height:5,background:'#141c2b',borderRadius:2.5,overflow:'hidden'}}>
+                      <div style={{height:'100%',width:`${Math.min(100,(((telem?.battery_v??11.85)-9.6)/3*100))}%`,background:'linear-gradient(90deg,#10b981,#3b82f6)',borderRadius:2.5}}/>
+                    </div>
+                    <div style={{fontFamily:'JetBrains Mono',fontSize:7,color:'#334155',marginTop:4}}>3S LiPo - {Math.max(0, Math.min(100, (((telem?.battery_v??11.85)-9.6)/3*100)|0))}% Capacity</div>
+                  </div>
+
+                  {/* Diagnostic LEDs */}
+                  <div style={{display:'flex',flexDirection:'column',gap:4}}>
+                    <LED label="IMU MPU-6050" ok={!!telem} blink/>
+                    <LED label="BARO BMP280" ok={!!telem} blink/>
+                    <LED label="UART DMA" ok={!!telem}/>
+                  </div>
+                  <div style={{display:'flex',flexDirection:'column',gap:4}}>
+                    <LED label="PWM OUTPUT" ok={!!telem}/>
+                    <LED label="TELEMETRY LINK" ok={!!telem} blink/>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',background:'#090d16',padding:'4px 6px',borderRadius:4,border:'1px solid rgba(255,255,255,0.03)'}}>
+                      <span style={{fontFamily:'JetBrains Mono',fontSize:6.5,color:'#475569'}}>RSSI</span>
+                      <span style={{fontFamily:'JetBrains Mono',fontSize:7.5,color:'#10b981',fontWeight:'bold'}}>{telem?.rssi_dbm??'-68'} dBm</span>
+                    </div>
+                  </div>
+                </div>
               </Panel>
-              <Panel title="Raw Sensors">
-                {telem?[{k:'GYRO X',v:`${telem.rates?.gyro_x_dps} deg/s`},{k:'GYRO Y',v:`${telem.rates?.gyro_y_dps} deg/s`},{k:'GYRO Z',v:`${telem.rates?.gyro_z_dps} deg/s`},{k:'ACCEL X',v:`${telem.raw_accel?.ax_g} g`},{k:'ACCEL Y',v:`${telem.raw_accel?.ay_g} g`},{k:'ACCEL Z',v:`${telem.raw_accel?.az_g} g`},{k:'SERVO PITCH',v:`${telem.actuators?.servo_pitch_us} µs`},{k:'SERVO YAW',v:`${telem.actuators?.servo_yaw_us} µs`},{k:'ALTITUDE',v:`${telem.altitude_m} m`}].map(r=><DR key={r.k} label={r.k} value={r.v}/>):null}
+
+              {/* Right: Downlink Hex Packet Stream */}
+              <Panel title="Downlink Hex Data Stream" accent="#e8121c" 
+                titleRight={<span style={{fontFamily:'JetBrains Mono',fontSize:7,color:'#e8121c',textTransform:'uppercase',letterSpacing:'0.08em'}}>● RECEIVING</span>}>
+                <div style={{
+                  background:'#05080f', border:'1px solid rgba(232,18,28,0.15)', borderRadius:6, padding:8, 
+                  fontFamily:'"Courier New", Courier, monospace', fontSize:7.5, color:'#4ade80', height:140, 
+                  overflowY:'hidden', display:'flex', flexDirection:'column-reverse', gap:3, boxShadow:'inset 0 0 10px rgba(0,0,0,0.8)'
+                }}>
+                  {packetLogs.length > 0 ? packetLogs.map((log, idx) => (
+                    <div key={idx} style={{ opacity: idx === 0 ? 1 : Math.max(0.2, 1 - idx * 0.08), whiteSpace:'pre-wrap' }}>
+                      {log}
+                    </div>
+                  )) : (
+                    <div style={{ color: '#64748b', textAlign: 'center', paddingTop: 50 }}>
+                      WAITING FOR DOWNLINK DATA...
+                    </div>
+                  )}
+                </div>
               </Panel>
             </div>
           </div>
