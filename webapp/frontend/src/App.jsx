@@ -355,6 +355,114 @@ function SimulatorRocket({ tvcState, windForce, dragCoeff, controllerIdx, padAct
   );
 }
 
+// ─── 3D CFD FLOW FIELD & SHOCK VISUALIZER ──────────────────────────────────────
+function CfdFlowField({ mach = 0.25, alpha = 2.0, mode = 'STREAMLINES' }) {
+  const pointsRef = useRef();
+  const particleCount = 450;
+
+  const [positions, colors] = useMemo(() => {
+    const pos = new Float32Array(particleCount * 3);
+    const col = new Float32Array(particleCount * 3);
+    for (let i = 0; i < particleCount; i++) {
+      pos[i * 3 + 0] = (Math.random() - 0.5) * 3.2;
+      pos[i * 3 + 1] = (Math.random() - 0.5) * 3.2;
+      pos[i * 3 + 2] = -4.5 + Math.random() * 9.0;
+
+      col[i * 3 + 0] = 0.2;
+      col[i * 3 + 1] = 0.6;
+      col[i * 3 + 2] = 1.0;
+    }
+    return [pos, col];
+  }, [particleCount]);
+
+  useFrame((state, delta) => {
+    if (!pointsRef.current) return;
+    const posAttr = pointsRef.current.geometry.attributes.position;
+    const colAttr = pointsRef.current.geometry.attributes.color;
+    const p = posAttr.array;
+    const c = colAttr.array;
+
+    const velBase = Math.max(0.15, mach * 3.8);
+    const alphaRad = (alpha * Math.PI) / 180;
+
+    for (let i = 0; i < particleCount; i++) {
+      let x = p[i * 3 + 0];
+      let y = p[i * 3 + 1];
+      let z = p[i * 3 + 2];
+
+      z += velBase * delta * 2.8;
+      y += Math.sin(alphaRad) * velBase * delta * 1.6;
+
+      const distRadial = Math.hypot(x, y);
+      if (z > -2.0 && z < 2.0 && distRadial < 0.68) {
+        const factor = (0.68 - distRadial) * 3.2;
+        x += (x / (distRadial + 1e-4)) * factor * delta * 4;
+        y += (y / (distRadial + 1e-4)) * factor * delta * 4;
+      }
+
+      if (z > 4.5) {
+        z = -4.5;
+        x = (Math.random() - 0.5) * 3.2;
+        y = (Math.random() - 0.5) * 3.2;
+      }
+
+      p[i * 3 + 0] = x;
+      p[i * 3 + 1] = y;
+      p[i * 3 + 2] = z;
+
+      const speedNorm = Math.min(1.0, (velBase + Math.abs(x) * 0.4) / 3.2);
+      if (mode === 'VORTICITY') {
+        c[i * 3 + 0] = z > 1.5 ? 0.95 : 0.2;
+        c[i * 3 + 1] = z > 1.5 ? 0.6 : 0.8;
+        c[i * 3 + 2] = z > 1.5 ? 0.1 : 0.3;
+      } else {
+        c[i * 3 + 0] = speedNorm > 0.6 ? 0.95 : 0.1;
+        c[i * 3 + 1] = speedNorm > 0.3 && speedNorm <= 0.7 ? 0.85 : 0.35;
+        c[i * 3 + 2] = speedNorm < 0.5 ? 0.95 : 0.15;
+      }
+    }
+
+    posAttr.needsUpdate = true;
+    colAttr.needsUpdate = true;
+  });
+
+  const shockAngle = mach > 0.6 ? Math.asin(Math.min(1.0, 1.0 / (mach + 0.05))) : Math.PI / 3;
+
+  return (
+    <group>
+      <points ref={pointsRef}>
+        <bufferGeometry>
+          <bufferAttribute attach="attributes-position" args={[positions, 3]} />
+          <bufferAttribute attach="attributes-color" args={[colors, 3]} />
+        </bufferGeometry>
+        <pointsMaterial size={0.065} vertexColors transparent opacity={mode === 'STREAMLINES' ? 0.85 : 0.4} sizeAttenuation />
+      </points>
+
+      {mach >= 0.55 && (
+        <group rotation={[Math.PI / 2 + (alpha * Math.PI) / 180, 0, 0]} position={[0, 1.2, 0.4]}>
+          <mesh>
+            <coneGeometry args={[1.5 * Math.tan(shockAngle), 3.0, 32, 1, true]} />
+            <meshBasicMaterial
+              color={mach > 0.75 ? "#e8121c" : "#f59e0b"}
+              wireframe={mode === 'SCHLIEREN'}
+              transparent
+              opacity={mode === 'SCHLIEREN' ? 0.55 : 0.22}
+              side={THREE.DoubleSide}
+            />
+          </mesh>
+        </group>
+      )}
+
+      <group position={[0, -1.6, 0]}>
+        <mesh>
+          <cylinderGeometry args={[0.32, 0.65, 1.2, 16]} />
+          <meshBasicMaterial color={mode === 'VORTICITY' ? '#ef4444' : '#f59e0b'} transparent opacity={0.22} wireframe />
+        </mesh>
+      </group>
+    </group>
+  );
+}
+
 // ─── CHART ─────────────────────────────────────────────────────────────────────
 function Chart({ data, extra={} }) {
   const [hoverIdx, setHoverIdx] = useState(null);
@@ -902,6 +1010,7 @@ export default function App() {
   const [cfdData, setCfdData] = useState(null);
   const [cfdMach, setCfdMach] = useState(0.25);
   const [cfdAlpha, setCfdAlpha] = useState(2.0);
+  const [cfdMode, setCfdMode] = useState('STREAMLINES');
 
   const keyOk = usbKey === 'NEAL2026';
   const ctrl={1:'PID',2:'LQI',3:'MRAC',4:'ADRC'};
@@ -1059,41 +1168,110 @@ export default function App() {
     return ()=>{ live=false; clearInterval(id); };
   },[]);
 
-  // ── Derived state ──────────────────────────────────────────────────────────
-  const state = useMemo(()=>{
-    if(!simData) return {pitch:0,delta:0,alt:0,drift:0,isFiring:false,pd:0,dd:0};
-    const max=simData.t[simData.t.length-1];
-    const idx=Math.min(Math.floor((time/max)*(simData.t.length-1)),simData.t.length-1);
-    return {pitch:(simData.theta[idx]*Math.PI)/180,delta:(simData.delta[idx]*Math.PI)/180,
-      alt:simData.altitude[idx],drift:simData.drift_x[idx],
-      isFiring:time<params.burn_time_s,pd:simData.theta[idx],dd:simData.delta[idx]};
-  },[simData,time,params.burn_time_s]);
+  // ── Derived state (Unified sampling across Live, OpenRocket, and Simulation) ──
+  const liveMode = !!telem;
+
+  const sampleState = useMemo(() => {
+    if (liveMode && telem) {
+      const alt = telem.altitude_m ?? 0;
+      const driftX = hist.current.x[hist.current.x.length - 1] ?? 0;
+      const driftY = hist.current.y[hist.current.y.length - 1] ?? 0;
+      const pitch = (telem.orientation?.pitch_deg ?? 0) * Math.PI / 180;
+      const roll = (telem.orientation?.roll_deg ?? 0) * Math.PI / 180;
+      const yaw = (telem.orientation?.yaw_deg ?? 0) * Math.PI / 180;
+      const deltaP = (((telem.actuators?.servo_pitch_us ?? 1500) - 1500) / 500) * params.gimbal_limit * Math.PI / 180;
+      const deltaY = (((telem.actuators?.servo_yaw_us ?? 1500) - 1500) / 500) * params.gimbal_limit * Math.PI / 180;
+      const isFiring = launch.launched;
+      return { pitch, roll, yaw, deltaP, deltaY, alt, driftX, driftY, isFiring, pd: telem.orientation?.pitch_deg ?? 0, dd: (telem.actuators?.servo_pitch_us - 1500) / 500 * params.gimbal_limit, delta: deltaP };
+    }
+
+    if (orkData) {
+      const tArr = orkData.t;
+      const maxT = tArr[tArr.length - 1];
+      const clampedT = Math.min(time, maxT);
+      const idx = Math.min(Math.floor((clampedT / maxT) * (tArr.length - 1)), tArr.length - 1);
+
+      const alt = orkData.altitude[idx];
+      const driftX = orkData.pos_east[idx];
+      const driftY = orkData.pos_north[idx];
+      const vVert = orkData.v_vert ? orkData.v_vert[idx] : 0;
+      const isFiring = clampedT <= (params.burn_time_s || 1.2);
+
+      let pitchDeg = 0;
+      if (clampedT <= (params.burn_time_s || 1.2)) {
+        pitchDeg = 5.0 * (clampedT / (params.burn_time_s || 1.2));
+      } else if (vVert >= 0) {
+        pitchDeg = 5.0 * (1.0 - (clampedT - 1.2) / 3.8);
+      } else {
+        const descentT = clampedT - 5.0;
+        pitchDeg = -Math.min(170, descentT * 50);
+      }
+
+      return {
+        pitch: (pitchDeg * Math.PI) / 180,
+        roll: 0,
+        yaw: 0,
+        deltaP: isFiring ? (Math.sin(clampedT * 8) * 0.04) : 0,
+        deltaY: 0,
+        alt,
+        driftX,
+        driftY,
+        isFiring,
+        pd: pitchDeg,
+        dd: isFiring ? Math.sin(clampedT * 8) * 2.5 : 0,
+        delta: isFiring ? Math.sin(clampedT * 8) * 0.04 : 0
+      };
+    }
+
+    if (simData) {
+      const tArr = simData.t;
+      const maxT = tArr[tArr.length - 1];
+      const clampedT = Math.min(time, maxT);
+      const idx = Math.min(Math.floor((clampedT / maxT) * (tArr.length - 1)), tArr.length - 1);
+      const isFiring = clampedT <= params.burn_time_s;
+
+      return {
+        pitch: (simData.theta[idx] * Math.PI) / 180,
+        roll: simData.roll ? (simData.roll[idx] * Math.PI) / 180 : 0,
+        yaw: simData.yaw ? (simData.yaw[idx] * Math.PI) / 180 : 0,
+        deltaP: (simData.delta[idx] * Math.PI) / 180,
+        deltaY: simData.delta_y ? (simData.delta_y[idx] * Math.PI) / 180 : 0,
+        alt: simData.altitude[idx],
+        driftX: simData.drift_x[idx],
+        driftY: simData.drift_y ? simData.drift_y[idx] : 0,
+        isFiring,
+        pd: simData.theta[idx],
+        dd: simData.delta[idx],
+        delta: (simData.delta[idx] * Math.PI) / 180
+      };
+    }
+
+    return { pitch: 0, roll: 0, yaw: 0, deltaP: 0, deltaY: 0, alt: 0, driftX: 0, driftY: 0, isFiring: false, pd: 0, dd: 0, delta: 0 };
+  }, [liveMode, telem, launch.launched, orkData, simData, time, params.burn_time_s, params.gimbal_limit]);
+
+  const state = sampleState;
+  const currentPitch = sampleState.pitch;
+  const currentRoll = sampleState.roll;
+  const currentYaw = sampleState.yaw;
+  const currentDeltaP = sampleState.deltaP;
+  const currentDeltaY = sampleState.deltaY;
+  const currentAlt = sampleState.alt;
+  const currentDriftX = sampleState.driftX;
+  const currentDriftY = sampleState.driftY;
+  const motorFiring = sampleState.isFiring;
 
   const ax=telem?.raw_accel?.ax_g??0;
   const ay=telem?.raw_accel?.ay_g??0;
   const az=telem?.raw_accel?.az_g??1;
   const totalG=Math.sqrt(ax*ax+ay*ay+az*az);
-  const altM=telem?.altitude_m??0;
+  const altM=telem?.altitude_m??currentAlt;
   const pressHpa=101325*Math.pow(1-2.25577e-5*Math.max(0,altM),5.25588)/100;
   const gpsLat=telem?.gps?.lat??23.80388;
   const gpsLon=telem?.gps?.lon??90.36277;
   const servoP=telem?.actuators?((telem.actuators.servo_pitch_us-1500)/500*params.gimbal_limit):state.dd;
   const servoY=telem?.actuators?((telem.actuators.servo_yaw_us-1500)/500*params.gimbal_limit):0;
-  const coastTime = !state.isFiring ? Math.max(0, time - params.burn_time_s) : 0;
+  const coastTime = !state.isFiring ? Math.max(0, time - (params.burn_time_s||1.2)) : 0;
   const adrcEst = Math.abs(state.dd * 1.35 + (Math.random() * 0.1 - 0.05));
-
-  const liveMode = !!telem;
-  const currentPitch = liveMode ? (telem.orientation.pitch_deg * Math.PI / 180) : state.pitch;
-  const currentRoll = liveMode ? (telem.orientation.roll_deg * Math.PI / 180) : (simData ? (simData.roll[Math.min(Math.floor((time/(simData.t[simData.t.length-1]||1))*(simData.t.length-1)),simData.t.length-1)]*Math.PI)/180 : 0);
-  const currentYaw = liveMode ? (telem.orientation.yaw_deg * Math.PI / 180) : (simData ? (simData.yaw[Math.min(Math.floor((time/(simData.t[simData.t.length-1]||1))*(simData.t.length-1)),simData.t.length-1)]*Math.PI)/180 : 0);
-  
-  const currentDeltaP = liveMode ? ((telem.actuators?.servo_pitch_us - 1500)/500 * params.gimbal_limit * Math.PI / 180) : state.delta;
-  const currentDeltaY = liveMode ? ((telem.actuators?.servo_yaw_us - 1500)/500 * params.gimbal_limit * Math.PI / 180) : (simData ? ((simData.delta_y ? simData.delta_y[Math.min(Math.floor((time/(simData.t[simData.t.length-1]||1))*(simData.t.length-1)),simData.t.length-1)] : 0)*Math.PI)/180 : 0);
-
-  const currentAlt = liveMode ? altM : state.alt;
-  const currentDriftX = liveMode ? (hist.current.x[hist.current.x.length - 1] ?? 0) : state.drift;
-  const currentDriftY = liveMode ? (hist.current.y[hist.current.y.length - 1] ?? 0) : (simData ? (simData.drift_y ? simData.drift_y[Math.min(Math.floor((time/(simData.t[simData.t.length-1]||1))*(simData.t.length-1)),simData.t.length-1)] : 0) : 0);
-  const motorFiring = liveMode ? launch.launched : state.isFiring;
 
   // ─ ORK trajectory scale factors (real meters → 3D units) ─
   // alt: 59.5m max → 7.14 units (good visual height)
@@ -2240,14 +2418,24 @@ export default function App() {
             <div style={{display:'grid',gridTemplateColumns:'1fr 340px',gap:10}}>
               
               {/* 3D Flow Streamlines Canvas */}
-              <Panel title="3D Aerodynamic Flow Streamlines &amp; Velocity Field" accent="#3b82f6" titleRight={<Badge color="#3b82f6">REAL-TIME CFD</Badge>}>
+              <Panel title="3D Aerodynamic Flow Streamlines &amp; Velocity Field" accent="#3b82f6" titleRight={
+                <div style={{display:'flex',gap:4}}>
+                  {['STREAMLINES','PRESSURE','SCHLIEREN','VORTICITY'].map(m=>(
+                    <button key={m} onClick={()=>setCfdMode(m)} style={{
+                      fontFamily:'JetBrains Mono',fontSize:6,fontWeight:700,padding:'2px 6px',borderRadius:3,
+                      background:cfdMode===m?'#3b82f6':'rgba(255,255,255,0.04)',color:cfdMode===m?'#fff':'#64748b',
+                      border:cfdMode===m?'1px solid #3b82f6':'1px solid rgba(255,255,255,0.08)',cursor:'pointer'
+                    }}>{m}</button>
+                  ))}
+                </div>
+              }>
                 <div style={{height:400,position:'relative',background:'linear-gradient(180deg,#070c17,#090d1c)',borderRadius:6,overflow:'hidden',border:'1px solid rgba(255,255,255,0.04)'}}>
                   <Canvas camera={{position:[4,2,3.5],fov:42}}>
                     <ambientLight intensity={1.8}/>
                     <directionalLight position={[10,15,10]} intensity={2}/>
                     <Suspense fallback={null}>
-                      {/* Flow Field Streamline Particles */}
-                      <CfdFlowField mach={cfdMach} alpha={cfdAlpha} />
+                      {/* Flow Field Streamline Particles & Shock Wave */}
+                      <CfdFlowField mach={cfdMach} alpha={cfdAlpha} mode={cfdMode} />
                       
                       {/* Rocket Geometry oriented with Alpha (Angle of Attack) */}
                       <group rotation={[(cfdAlpha * Math.PI)/180, 0, 0]} position={[0,0,0]}>
