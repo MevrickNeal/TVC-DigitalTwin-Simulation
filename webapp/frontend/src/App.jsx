@@ -355,10 +355,51 @@ function SimulatorRocket({ tvcState, windForce, dragCoeff, controllerIdx, padAct
   );
 }
 
+// ─── WIND TUNNEL TEST SECTION ENCLOSURE ────────────────────────────────────────
+function WindTunnelEnclosure() {
+  return (
+    <group>
+      {/* Octagonal Glass Test Tunnel Section */}
+      <mesh rotation={[Math.PI / 2, 0, 0]}>
+        <cylinderGeometry args={[2.2, 2.2, 8.2, 8, 1, true]} />
+        <meshBasicMaterial color="#3b82f6" transparent opacity={0.07} wireframe />
+      </mesh>
+      {/* Steel Ring Structural Frame Support */}
+      {[-3.8, -1.9, 0, 1.9, 3.8].map((zPos, idx) => (
+        <mesh key={idx} rotation={[Math.PI / 2, 0, 0]} position={[0, 0, zPos]}>
+          <torusGeometry args={[2.22, 0.025, 16, 8]} />
+          <meshBasicMaterial color="#3b82f6" transparent opacity={0.35} />
+        </mesh>
+      ))}
+      {/* Front Contraction Cone (Inlet Flow Straightener) */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, -4.6]}>
+        <cylinderGeometry args={[2.2, 3.4, 1.2, 16, 1, true]} />
+        <meshBasicMaterial color="#475569" transparent opacity={0.25} wireframe />
+      </mesh>
+      {/* Rear Exhaust Diffuser Duct */}
+      <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, 0, 4.6]}>
+        <cylinderGeometry args={[3.4, 2.2, 1.2, 16, 1, true]} />
+        <meshBasicMaterial color="#475569" transparent opacity={0.25} wireframe />
+      </mesh>
+      {/* Pitch Mechanism Stinger Mounting Strut */}
+      <group position={[0, -0.4, 1.8]} rotation={[0, 0, 0]}>
+        <mesh rotation={[Math.PI / 2, 0, 0]}>
+          <cylinderGeometry args={[0.06, 0.06, 2.2, 16]} />
+          <meshStandardMaterial color="#64748b" metalness={0.9} roughness={0.2} />
+        </mesh>
+        <mesh position={[0, -0.4, -0.8]}>
+          <boxGeometry args={[0.18, 0.8, 0.4]} />
+          <meshStandardMaterial color="#475569" metalness={0.8} roughness={0.3} />
+        </mesh>
+      </group>
+    </group>
+  );
+}
+
 // ─── 3D CFD FLOW FIELD & SHOCK VISUALIZER ──────────────────────────────────────
 function CfdFlowField({ mach = 0.25, alpha = 2.0, mode = 'STREAMLINES' }) {
   const pointsRef = useRef();
-  const particleCount = 450;
+  const particleCount = 480;
 
   const [positions, colors] = useMemo(() => {
     const pos = new Float32Array(particleCount * 3);
@@ -439,7 +480,7 @@ function CfdFlowField({ mach = 0.25, alpha = 2.0, mode = 'STREAMLINES' }) {
       </points>
 
       {mach >= 0.55 && (
-        <group rotation={[Math.PI / 2 + (alpha * Math.PI) / 180, 0, 0]} position={[0, 1.2, 0.4]}>
+        <group rotation={[Math.PI / 2 + (alpha * Math.PI) / 180, 0, 0]} position={[0, 0, -1.2]}>
           <mesh>
             <coneGeometry args={[1.5 * Math.tan(shockAngle), 3.0, 32, 1, true]} />
             <meshBasicMaterial
@@ -453,7 +494,7 @@ function CfdFlowField({ mach = 0.25, alpha = 2.0, mode = 'STREAMLINES' }) {
         </group>
       )}
 
-      <group position={[0, -1.6, 0]}>
+      <group position={[0, 0, 1.6]} rotation={[Math.PI / 2, 0, 0]}>
         <mesh>
           <cylinderGeometry args={[0.32, 0.65, 1.2, 16]} />
           <meshBasicMaterial color={mode === 'VORTICITY' ? '#ef4444' : '#f59e0b'} transparent opacity={0.22} wireframe />
@@ -2434,31 +2475,34 @@ export default function App() {
                     <ambientLight intensity={1.8}/>
                     <directionalLight position={[10,15,10]} intensity={2}/>
                     <Suspense fallback={null}>
+                      {/* Subsonic / Supersonic Wind Tunnel Glass Enclosure & Stinger Mount */}
+                      <WindTunnelEnclosure />
+
                       {/* Flow Field Streamline Particles & Shock Wave */}
                       <CfdFlowField mach={cfdMach} alpha={cfdAlpha} mode={cfdMode} />
                       
-                      {/* Rocket Geometry oriented with Alpha (Angle of Attack) */}
-                      <group rotation={[(cfdAlpha * Math.PI)/180, 0, 0]} position={[0,0,0]}>
+                      {/* Rocket Geometry oriented Head-On facing into the wind with Alpha Angle of Attack */}
+                      <group rotation={[Math.PI / 2 + (cfdAlpha * Math.PI) / 180, 0, 0]} position={[0,0,0]}>
                         <RocketModel pitch={0} roll={0} yaw={0} isFiring={false}/>
                       </group>
 
                       {/* 3D Flow Annotations */}
-                      <Html position={[0, 0.4, -0.6]} center>
+                      <Html position={[0, 0.4, -1.8]} center>
                         <div style={{fontFamily:'JetBrains Mono',fontSize:6,color:'#ef4444',background:'#090d16cc',padding:'1px 4px',border:'1px solid rgba(239,68,68,0.3)',borderRadius:2,whiteSpace:'nowrap'}}>
-                          STAGNATION: Cp = 1.0
+                          STAGNATION: Cp = +1.00
                         </div>
                       </Html>
-                      <Html position={[0, 0.5, 0.3]} center>
+                      <Html position={[0, 0.55, -0.9]} center>
                         <div style={{fontFamily:'JetBrains Mono',fontSize:6,color:'#3b82f6',background:'#090d16cc',padding:'1px 4px',border:'1px solid rgba(59,130,246,0.3)',borderRadius:2,whiteSpace:'nowrap'}}>
                           SHOULDER EXPANSION: Cp = -0.35
                         </div>
                       </Html>
-                      <Html position={[0, 0.6, 2.2]} center>
+                      <Html position={[0, 0.65, 1.1]} center>
                         <div style={{fontFamily:'JetBrains Mono',fontSize:6,color:'#8b5cf6',background:'#090d16cc',padding:'1px 4px',border:'1px solid rgba(139,92,246,0.3)',borderRadius:2,whiteSpace:'nowrap'}}>
                           FIN LEADING EDGE SHOCK
                         </div>
                       </Html>
-                      <Html position={[0, 0.3, 3.2]} center>
+                      <Html position={[0, 0.45, 2.2]} center>
                         <div style={{fontFamily:'JetBrains Mono',fontSize:6,color:'#f59e0b',background:'#090d16cc',padding:'1px 4px',border:'1px solid rgba(245,158,11,0.3)',borderRadius:2,whiteSpace:'nowrap'}}>
                           BASE RECIRCULATION WAKE
                         </div>
